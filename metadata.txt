@@ -1,0 +1,14 @@
+[general]
+name=UTEC FW Netz (dev)
+
+version=0.0
+changelog=
+    Version 0.0:
+    - backup only
+
+description=Berechnung von Ferwärmenetzen.
+qgisMinimumVersion=3.0
+author=Florian Ludwig
+email=devalue-scope-drum@duck.com
+icon=icon.svg
+download_url_base=file:////dc1/netz$/Software/QGIS_Plugins_UTEC

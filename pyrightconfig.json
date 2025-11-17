@@ -1,0 +1,8 @@
+{
+    "reportAttributeAccessIssue": "none",
+    "reportMissingImports": "warning",
+    "reportMissingModuleSource": "none",
+    "reportGeneralTypeIssues": "none",
+    "reportPrivateImportUsage": "none",
+    "executionEnvironments": []
+}
