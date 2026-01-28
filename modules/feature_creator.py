@@ -12,7 +12,7 @@ from qgis.core import (
 )
 from qgis.PyQt.QtCore import QCoreApplication
 
-from . import constants as cont
+from .constants import Names, NewLayerFields, Numbers, PipeDimensions
 from .logs_and_errors import log_debug
 from .vector_analysis_tools import VectorAnalysisTools
 
@@ -51,7 +51,7 @@ class FeatureCreator(VectorAnalysisTools):
         """
         if features is None:
             search_geom: QgsGeometry = QgsGeometry.fromPointXY(point).buffer(
-                cont.Numbers.search_radius, 5
+                Numbers.search_radius, 5
             )
             features = self.get_intersecting_features(search_geom)
 
@@ -64,11 +64,11 @@ class FeatureCreator(VectorAnalysisTools):
             return 0
 
         attrs: dict[str, str | None] = {
-            cont.NewLayerFields.type.name: cont.Names.attr_val_type_question
+            NewLayerFields.type.name: Names.attr_val_type_question
         }
         attrs |= self.get_connected_attributes(features)
         if note:
-            attrs[cont.NewLayerFields.notes.name] = note
+            attrs[NewLayerFields.notes.name] = note
         return 1 if self.create_feature(QgsGeometry.fromPointXY(point), attrs) else 0
 
     def create_house_connection(
@@ -83,12 +83,16 @@ class FeatureCreator(VectorAnalysisTools):
         Returns:
             1 if the feature was created successfully, 0 otherwise.
         """
-        attrs: dict = {cont.NewLayerFields.type.name: cont.Names.attr_val_type_house}
+        attrs: dict = {NewLayerFields.type.name: Names.attr_val_type_house}
         attrs |= self.get_connected_attributes(features)
         return 1 if self.create_feature(QgsGeometry.fromPointXY(point), attrs) else 0
 
     def create_bend(
-        self, point: QgsPointXY, features: list[QgsFeature], angle: float
+        self,
+        point: QgsPointXY,
+        features: list[QgsFeature],
+        angle: float,
+        note: str | None = None,
     ) -> int:
         """Create a 'bend' feature if the angle is sufficient.
 
@@ -96,19 +100,23 @@ class FeatureCreator(VectorAnalysisTools):
             point: The location of the bend.
             features: The list of connected features.
             angle: The calculated angle of the bend.
+            note: An optional note to add to the feature's attributes.
 
         Returns:
             1 if the feature was created successfully, 0 otherwise.
         """
-        if angle > (cont.Numbers.circle_semi - cont.Numbers.min_angle_bend):
+        if angle < Numbers.min_angle_bend:
             return 0
 
         attrs: dict = {
-            cont.NewLayerFields.type.name: cont.Names.attr_val_type_bend,
-            cont.NewLayerFields.angle.name: round(cont.Numbers.circle_semi - angle),
+            NewLayerFields.type.name: Names.attr_val_type_bend,
+            NewLayerFields.angle.name: round(angle),
         }
         attrs |= self.get_connected_attributes(features)
-        attrs.pop(cont.NewLayerFields.dim_2.name, None)
+        if note:
+            attrs[NewLayerFields.notes.name] = note
+
+        attrs.pop(NewLayerFields.dim_2.name, None)
         return 1 if self.create_feature(QgsGeometry.fromPointXY(point), attrs) else 0
 
     def create_t_piece(
@@ -134,8 +142,8 @@ class FeatureCreator(VectorAnalysisTools):
         """
         all_features: list[QgsFeature] = [*main_pipe, connecting_pipe]
         attrs: dict = {
-            cont.NewLayerFields.type.name: cont.Names.attr_val_type_t_piece,
-            cont.NewLayerFields.notes.name: note,
+            NewLayerFields.type.name: Names.attr_val_type_t_piece,
+            NewLayerFields.notes.name: note,
         }
         attrs |= self.get_connected_attributes(all_features)
 
@@ -150,8 +158,8 @@ class FeatureCreator(VectorAnalysisTools):
             conn_dim: int | None = connecting_pipe.attribute(self.dim_field_name)
 
             if main_dims and conn_dim is not None:
-                attrs[cont.NewLayerFields.dim_1.name] = main_dims[-1]
-                attrs[cont.NewLayerFields.dim_2.name] = conn_dim
+                attrs[NewLayerFields.dim_1.name] = main_dims[-1]
+                attrs[NewLayerFields.dim_2.name] = conn_dim
 
         return 1 if self.create_feature(QgsGeometry.fromPointXY(point), attrs) else 0
 
@@ -161,7 +169,7 @@ class FeatureCreator(VectorAnalysisTools):
         dim_main_1: float,
         dim_main_2: float,
         main_pipe: list[QgsFeature],
-        distance: float = cont.Numbers.distance_t_reducer,
+        distance: float = Numbers.distance_t_reducer,
     ) -> int:
         """Create reducers for a dimension change in the main pipe.
 
@@ -185,8 +193,8 @@ class FeatureCreator(VectorAnalysisTools):
         )
 
         try:
-            large_idx: int = cont.PipeDimensions.diameters.index(large_dim)
-            small_idx: int = cont.PipeDimensions.diameters.index(small_dim)
+            large_idx: int = PipeDimensions.diameters.index(large_dim)
+            small_idx: int = PipeDimensions.diameters.index(small_dim)
         except ValueError:
             # fmt: off
             note_text: str = QCoreApplication.translate("feature_note", "Non-standard pipe dimension detected for reducer.")  # noqa: E501
@@ -197,38 +205,36 @@ class FeatureCreator(VectorAnalysisTools):
         if dim_steps <= 0:
             return 0
 
-        num_reducers: int = (
-            dim_steps - 1
-        ) // cont.PipeDimensions.max_dim_jump_reducer + 1
+        num_reducers: int = (dim_steps - 1) // PipeDimensions.max_dim_jump_reducer + 1
         created_count = 0
 
         for i in range(num_reducers):
-            distance += cont.Numbers.distance_t_reducer * i
+            # The first reducer is at 'distance',
+            # subsequent ones have a constant distance between them.
+            current_distance: float = distance + (Numbers.distance_t_reducer * i)
             reducer_point: QgsPointXY | None = self.get_point_along_line(
-                point, smaller_dim_feature, distance
+                point, smaller_dim_feature, current_distance
             )
             if not reducer_point:
                 continue
 
-            current_large_idx: int = (
-                large_idx - i * cont.PipeDimensions.max_dim_jump_reducer
-            )
+            current_large_idx: int = large_idx - i * PipeDimensions.max_dim_jump_reducer
             current_small_idx: int = max(
                 small_idx,
-                large_idx - (i + 1) * cont.PipeDimensions.max_dim_jump_reducer,
+                large_idx - (i + 1) * PipeDimensions.max_dim_jump_reducer,
             )
-            dim_from: int = cont.PipeDimensions.diameters[current_large_idx]
-            dim_to: int = cont.PipeDimensions.diameters[current_small_idx]
+            dim_from: int = PipeDimensions.diameters[current_large_idx]
+            dim_to: int = PipeDimensions.diameters[current_small_idx]
             # fmt: off
             note_text: str = QCoreApplication.translate("feature_note", "Reducer from DN{0} to DN{1}").format(dim_from, dim_to)  # noqa: E501
             # fmt: on
 
             reducer_attrs: dict = self.get_connected_attributes([smaller_dim_feature])
             reducer_attrs |= {
-                cont.NewLayerFields.type.name: cont.Names.attr_val_type_reducer,
-                cont.NewLayerFields.dim_1.name: dim_from,
-                cont.NewLayerFields.dim_2.name: dim_to,
-                cont.NewLayerFields.notes.name: note_text,
+                NewLayerFields.type.name: Names.attr_val_type_reducer,
+                NewLayerFields.dim_1.name: dim_from,
+                NewLayerFields.dim_2.name: dim_to,
+                NewLayerFields.notes.name: note_text,
             }
 
             created_count += self.create_feature(

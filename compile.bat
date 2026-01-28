@@ -1,29 +1,57 @@
 @echo off
-setlocal enabledelayedexpansion
+setlocal
 
-:: This script compiles resources and translation files.
-:: It assumes you have the QGIS environment (and thus pyrcc5, pylupdate5, lrelease) in your PATH.
+:: This script compiles translation files and can launch Qt Linguist.
 :: Run this from the OSGeo4W Shell.
 
-echo Compiling resource file (resources.qrc)...
-pyrcc6 -o "resources.py" "resources.qrc"
+if not defined OSGEO4W_ROOT set "OSGEO4W_ROOT=C:\OSGeo4W"
 
 echo.
 echo Creating/updating translation source file (i18n/de.ts)...
 if not exist i18n mkdir i18n
 
-:: Find all .py files (excluding specified ones) and build a space-separated
-:: list of quoted paths directly into the PY_FILES variable.
+call :set_qt_env
+echo Using %PYLUPDATE%...
+
+setlocal enabledelayedexpansion
 set "PY_FILES="
-for /f "delims=" %%i in ('dir /s /b *.py ^| findstr /V /I /C:"__pycache__" /C:"\.git" /C:"\.venv" /C:"release.py" /C:"resources.py"') do (
+for /f "delims=" %%i in ('dir /s /b *.py ^| findstr /V /I /C:"__pycache__" /C:"\.git" /C:"\.venv" /C:"release.py"') do (
     set "PY_FILES=!PY_FILES! "%%i""
 )
-pylupdate6 -noobsolete -verbose !PY_FILES! -ts i18n/de.ts
+%PYLUPDATE% %FLAGS% !PY_FILES! %TS_FLAG% i18n/de.ts
+endlocal
+
+echo.
+echo Launching Qt Linguist...
+echo Please edit translations, save, and close Linguist to continue...
+start /wait linguist i18n/de.ts
 
 echo.
 echo Compiling translation file (i18n/de.qm)...
 lrelease i18n/de.ts
 
 echo.
-echo Compilation finished.
-endlocal
+echo Translation updated successfully.
+goto :eof
+
+:: --- Environment Setup Subroutine ---
+:set_qt_env
+    :: Avoid re-running if already set
+    if defined PYLUPDATE goto :eof
+
+    :: Detect pylupdate version and set environment
+    where pylupdate6 >nul 2>nul
+    if %ERRORLEVEL% EQU 0 (
+        set PYLUPDATE=pylupdate6
+        set "PATH=%OSGEO4W_ROOT%\apps\Qt6\bin;%PATH%"
+        set "QT_PLUGIN_PATH=%OSGEO4W_ROOT%\apps\Qt6\plugins"
+        set "FLAGS=--no-obsolete"
+        set "TS_FLAG=--ts"
+    ) else (
+        set PYLUPDATE=pylupdate5
+        set "PATH=%OSGEO4W_ROOT%\apps\Qt5\bin;%PATH%"
+        set "QT_PLUGIN_PATH=%OSGEO4W_ROOT%\apps\Qt5\plugins"
+        set "FLAGS=-noobsolete"
+        set "TS_FLAG=-ts"
+    )
+    goto :eof

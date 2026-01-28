@@ -15,7 +15,7 @@ from qgis.core import (
 from qgis.PyQt.QtCore import QCoreApplication
 from qgis.PyQt.QtWidgets import QProgressBar
 
-from . import constants as cont
+from .constants import Numbers
 from .feature_creator import FeatureCreator
 from .logs_and_errors import log_debug, raise_runtime_error
 from .point_collector import PointCollector
@@ -99,6 +99,41 @@ class PointOfInterestClassifier(FeatureCreator):
         log_debug("Feature search completed.", Qgis.Success)
         return created_count
 
+    def _handle_two_intersections(
+        self, point: QgsPointXY, intersecting_features: list[QgsFeature]
+    ) -> int:
+        """Process a point where two lines intersect.
+
+        This method determines if the intersection is a bend, a pseudo T-piece,
+        or a data error (crossing lines without a shared vertex).
+
+        Args:
+            point: The intersection point.
+            intersecting_features: The two features that intersect.
+
+        Returns:
+            The number of features created.
+        """
+        feat1, feat2 = intersecting_features
+        is_endpoint1: bool = self.is_endpoint(point, feat1)
+        is_endpoint2: bool = self.is_endpoint(point, feat2)
+
+        if is_endpoint1 and is_endpoint2:
+            # Both features end here. Treat as a 2-way intersection (bend/reducer).
+            return self._process_2_way_intersection(point, intersecting_features)
+
+        if is_endpoint1 ^ is_endpoint2:
+            # Exactly one feature ends here. This is a T-intersection.
+            return self._process_pseudo_t_intersection(point, feat1, feat2)
+
+        # Neither feature ends here; they just cross. This is a data error.
+        # fmt: off
+        note_text:str = QCoreApplication.translate("feature_note", "Intersection without endpoints - lines must be devided.")  # noqa: E501
+        # fmt: on
+        return self.create_questionable_point(
+            point, intersecting_features, note=note_text
+        )
+
     def _process_point(self, point: QgsPointXY) -> int:
         """Analyze a single point and create the appropriate feature(s).
 
@@ -114,7 +149,7 @@ class PointOfInterestClassifier(FeatureCreator):
             return 0
 
         search_geom: QgsGeometry = QgsGeometry.fromPointXY(point).buffer(
-            cont.Numbers.search_radius, 5
+            Numbers.search_radius, 5
         )
         intersecting_features: list[QgsFeature] = self.get_intersecting_features(
             search_geom
@@ -131,30 +166,12 @@ class PointOfInterestClassifier(FeatureCreator):
                 else self._process_2_way_intersection(point, intersecting_features)
             )
         # Case 2: Two lines intersect.
-        if n_intersections == 2:
-            feat1, feat2 = intersecting_features
-            is_endpoint1: bool = self.is_endpoint(point, feat1)
-            is_endpoint2: bool = self.is_endpoint(point, feat2)
-
-            if is_endpoint1 and is_endpoint2:
-                # Both features end here. Treat as a 2-way intersection (bend/reducer).
-                return self._process_2_way_intersection(point, intersecting_features)
-
-            if is_endpoint1 ^ is_endpoint2:
-                # Exactly one feature ends here. This is a T-intersection.
-                return self._process_pseudo_t_intersection(point, feat1, feat2)
-
-            # Neither feature ends here; they just cross. This is a data error.
-            # fmt: off
-            note_text:str = QCoreApplication.translate("feature_note", "Intersection without endpoints - lines must be devided.")  # noqa: E501
-            # fmt: on
-            return self.create_questionable_point(
-                point, intersecting_features, note=note_text
-            )
+        if n_intersections == 2:  # noqa: PLR2004
+            return self._handle_two_intersections(point, intersecting_features)
 
         # Case 3: Three lines intersect.
         # This is always a T-piece candidate.
-        if n_intersections == cont.Numbers.intersec_t:
+        if n_intersections == Numbers.intersec_t:
             return self.t_piece_finder.process_t_intersection(
                 point, intersecting_features
             )
@@ -196,15 +213,13 @@ class PointOfInterestClassifier(FeatureCreator):
             f"connecting pipe '{connecting_pipe.attribute('original_fid')}'"
         )
 
-        # To use the TIntersectionAnalyzer, we need to simulate three features.
-        # We do this by creating two temporary "dummy" features from the main pipe.
-        # These dummies represent the two segments of the main pipe.
+        # To determine the geometry of the main pipe, we need the vertices of
+        # the segment that the connecting pipe intersects with.
         p_before, p_after = self.get_adjacent_points_on_segment(
             point, main_pipe_feature
         )
+
         if not p_before or not p_after:
-            # This happens if the intersection point is not on any segment of the
-            # "passing through" line, which would be a data error.
             return self.create_questionable_point(
                 point, [feat1, feat2], note="Lines cross without a shared vertex."
             )
@@ -265,15 +280,23 @@ class PointOfInterestClassifier(FeatureCreator):
         return created_count
 
     def _possible_house_connection(self, point: QgsPointXY, feature: QgsFeature) -> int:
-        """Process a point that is the endpoint of a single line."""
+        """Process a point that is the endpoint of a single line.
+
+        Args:
+            point: The endpoint coordinate.
+            feature: The feature ending at this point.
+
+        Returns:
+            The number of features created (1 if successful, 0 otherwise).
+        """
         # Check if it's a lone line segment or a true house connection
         is_other_end_connected = False
         for s_e_point in self.get_start_end_of_line(feature):
-            if s_e_point.compare(point, cont.Numbers.tiny_number):
+            if s_e_point.compare(point, Numbers.tiny_number):
                 continue  # This is the endpoint we are currently processing
             # Check if the *other* endpoint is connected to something
             other_end_search: QgsGeometry = QgsGeometry.fromPointXY(s_e_point).buffer(
-                cont.Numbers.search_radius, 5
+                Numbers.search_radius, 5
             )
             if len(self.get_intersecting_features(other_end_search)) > 1:
                 is_other_end_connected = True

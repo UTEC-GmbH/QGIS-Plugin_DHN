@@ -15,7 +15,7 @@ from qgis.core import (
 )
 from qgis.PyQt.QtWidgets import QProgressBar
 
-from modules.logs_and_errors import log_debug
+from .logs_and_errors import log_debug
 
 
 class PointCollector:
@@ -123,6 +123,11 @@ class PointCollector:
         """Extract and add unique points from an intersection geometry.
 
         Only adds points that are not vertices of the intersecting features.
+
+        Args:
+            intersection_geom: The geometry of the intersection.
+            points_list: The list to append found points to.
+            intersecting_features: The features involved in the intersection.
         """
         points_to_add: list[QgsPointXY] = []
         wkb_type: Qgis.WkbType = intersection_geom.wkbType()
@@ -148,7 +153,16 @@ class PointCollector:
     def _is_vertex_of_any(
         point: QgsPointXY, features: list[QgsFeature], tolerance: float = 1e-4
     ) -> bool:
-        """Check if a point is a vertex of any of the given features."""
+        """Check if a point is a vertex of any of the given features.
+
+        Args:
+            point: The point to check.
+            features: The list of features to check against.
+            tolerance: The distance tolerance for the check. Defaults to 1e-4.
+
+        Returns:
+            True if the point is close to a vertex of any feature, False otherwise.
+        """
         for feature in features:
             geom = feature.geometry()
             if not geom:

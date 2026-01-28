@@ -18,8 +18,8 @@ from qgis.core import (
     QgsWkbTypes,
 )
 
-from modules import constants as cont
-from modules.logs_and_errors import log_debug
+from .constants import Names, NewLayerFields, Numbers
+from .logs_and_errors import log_debug
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -62,7 +62,7 @@ class VectorAnalysisTools:
             The name of the found field, or None if no match is found.
         """
         layer_fields: QgsFields = layer.fields()
-        field_names: Iterable[str] = cont.Names.sel_layer_field_dim
+        field_names: Iterable[str] = Names.sel_layer_field_dim
         found_name: str | None = next(
             (name for name in field_names if layer_fields.lookupField(name) != -1),
             None,
@@ -75,7 +75,15 @@ class VectorAnalysisTools:
         return found_name
 
     def create_feature(self, geometry: QgsGeometry, attributes: dict) -> bool:
-        """Create a new feature in the new layer."""
+        """Create a new feature in the new layer.
+
+        Args:
+            geometry: The geometry for the new feature.
+            attributes: A dictionary of attribute values.
+
+        Returns:
+            True if the feature was added successfully, False otherwise.
+        """
         data_provider: QgsVectorDataProvider | None = self.new_layer.dataProvider()
         if data_provider is None:
             log_debug("Data provider is None for new_layer.", Qgis.Critical)
@@ -86,7 +94,7 @@ class VectorAnalysisTools:
             layer_fields[idx].name() for idx in range(layer_fields.count())
         ]
 
-        attr_values = [
+        attr_values: list = [
             attributes.get(field_name)
             for field_name in field_names
             if field_name.lower() != "fid"
@@ -98,12 +106,19 @@ class VectorAnalysisTools:
         return self.new_layer.addFeature(new_feature)
 
     def get_connected_attributes(self, connected_features: list[QgsFeature]) -> dict:
-        """Get attributes from connected features."""
+        """Get attributes from connected features.
+
+        Args:
+            connected_features: A list of features connected to the point.
+
+        Returns:
+            A dictionary of attributes derived from the connected features.
+        """
         connected_ids: list[int] = sorted(
             {feature.attribute("original_fid") for feature in connected_features}
         )
         attributes: dict = {
-            cont.NewLayerFields.connected.name: cont.Names.line_separator.join(
+            NewLayerFields.connected.name: Names.line_separator.join(
                 str(id_int) or "???" for id_int in connected_ids
             )
         }
@@ -117,14 +132,21 @@ class VectorAnalysisTools:
                 },
                 reverse=True,
             )
-            attributes[cont.NewLayerFields.dim_1.name] = dims[0]
+            attributes[NewLayerFields.dim_1.name] = dims[0]
             if len(dims) > 1:
-                attributes[cont.NewLayerFields.dim_2.name] = dims[-1]
+                attributes[NewLayerFields.dim_2.name] = dims[-1]
 
         return attributes
 
     def get_intersecting_features(self, search_geom: QgsGeometry) -> list[QgsFeature]:
-        """Get intersecting features for a given geometry."""
+        """Get intersecting features for a given geometry.
+
+        Args:
+            search_geom: The geometry to search for intersections with.
+
+        Returns:
+            A list of features that intersect with the search geometry.
+        """
         search_rect: QgsRectangle = search_geom.boundingBox()
         candidate_ids: list[int] = self.selected_layer_index.intersects(search_rect)
         return [
@@ -137,14 +159,21 @@ class VectorAnalysisTools:
 
     @staticmethod
     def get_start_end_of_line(feature: QgsFeature) -> list[QgsPointXY]:
-        """Get the start and end points of a line feature."""
+        """Get the start and end points of a line feature.
+
+        Args:
+            feature: The line feature.
+
+        Returns:
+            A list containing the start and end points (QgsPointXY).
+        """
         points: list = []
         geom: QgsGeometry = feature.geometry()
         if not geom:
             return points
 
         wkb_type: Qgis.WkbType = geom.wkbType()
-        lines = []
+        lines: list = []
         if wkb_type == QgsWkbTypes.LineString:
             lines.append(geom.asPolyline())
         elif wkb_type == QgsWkbTypes.MultiLineString:
@@ -157,24 +186,43 @@ class VectorAnalysisTools:
 
     @staticmethod
     def calculate_angle(p1: QgsPointXY, p2: QgsPointXY, p3: QgsPointXY) -> float:
-        """Calculate the angle between three points in degrees using azimuths."""
+        """Calculate the deflection angle between two connected line segments.
 
+        This function calculates the angle of deflection at point `p2`, which
+        connects segments `p1-p2` and `p2-p3`.
+
+        - A straight line (p1-p2-p3 are collinear) will return 0°.
+        - A 90-degree turn will return 90°.
+        - A U-turn (p1 and p3 are at the same location) will return 180°.
+
+        Args:
+            p1: The start point of the first segment.
+            p2: The common point (vertex) where the segments meet.
+            p3: The end point of the second segment.
+
+        Returns:
+            The deflection angle in degrees, from 0 to 180.
+        """
         # Check for coincident points which would make angle calculation invalid.
-        if p2.compare(p1, cont.Numbers.tiny_number) or p2.compare(
-            p3, cont.Numbers.tiny_number
-        ):
-            log_debug("Coinciding points found.", Qgis.Warning)
-            return 0.0
+        if p2.compare(p1, Numbers.tiny_number) or p2.compare(p3, Numbers.tiny_number):
+            log_debug("Coincident points found for angle calculation.", Qgis.Warning)
+            # Coincident points mean the lines are on top of each other (a U-turn).
+            return Numbers.circle_semi
 
-        azimuth1: float = p2.azimuth(p1)
-        azimuth2: float = p2.azimuth(p3)
+        # Azimuth of the incoming segment (p1 -> p2)
+        azimuth_in: float = p1.azimuth(p2)
+        # Azimuth of the outgoing segment (p2 -> p3)
+        azimuth_out: float = p2.azimuth(p3)
 
-        angle: float = abs(azimuth1 - azimuth2)
+        # The angle between the two vectors
+        angle_diff: float = abs(azimuth_in - azimuth_out)
 
-        if angle > cont.Numbers.circle_semi:
-            angle = cont.Numbers.circle_full - angle
+        # The deflection angle is 180 degrees minus the smaller angle between the
+        # two vectors.
+        if angle_diff > Numbers.circle_semi:
+            angle_diff = Numbers.circle_full - angle_diff
 
-        return angle
+        return angle_diff
 
     def get_adjacent_vertices(
         self, point: QgsPointXY, feature: QgsFeature
@@ -197,10 +245,13 @@ class VectorAnalysisTools:
             return None, None
 
         # Find the closest vertex on the geometry to the given point
-        closest_v, vertex_idx, _, _, dist_sq = geom.closestVertex(point)
+        vertex: tuple[QgsPointXY, int, int, int, float] = geom.closestVertex(point)
+        closest_v: QgsPointXY = vertex[0]
+        vertex_idx: int = vertex[1]
+        dist_sq: float = vertex[4]
 
         # Ensure the point is actually a vertex (not an intermediate point on a segment)
-        if dist_sq > cont.Numbers.tiny_number**2:
+        if dist_sq > Numbers.tiny_number**2:
             return None, None
 
         # Check if the vertex is an endpoint of its line part
@@ -234,10 +285,14 @@ class VectorAnalysisTools:
             return None, None
 
         # Find the segment of the line closest to the point
-        dist_sq, _, after_vertex_idx, _ = geom.closestSegmentWithContext(point)
+        segment: tuple[float, QgsPointXY, int, int] = geom.closestSegmentWithContext(
+            point
+        )
+        dist_sq: float = segment[0]
+        after_vertex_idx: int = segment[2]
 
         # Ensure the point is actually on the line
-        if dist_sq < 0 or dist_sq > cont.Numbers.tiny_number**2:
+        if dist_sq < 0 or dist_sq > Numbers.tiny_number**2:
             log_debug(
                 f"Point {point.asWkt()} is not on the line geometry of "
                 f"feature {feature.attribute('original_fid')}.",
@@ -273,7 +328,7 @@ class VectorAnalysisTools:
         """
         if start_end_points := self.get_start_end_of_line(feature):
             return any(
-                point.compare(endpoint, cont.Numbers.tiny_number)
+                point.compare(endpoint, Numbers.tiny_number)
                 for endpoint in start_end_points
             )
         return False
@@ -298,13 +353,23 @@ class VectorAnalysisTools:
         if len(endpoints) != 2:  # noqa: PLR2004
             return None
 
-        p1, p2 = endpoints
+        p1: QgsPointXY = endpoints[0]
+        p2: QgsPointXY = endpoints[1]
         return p2 if p1.distance(reference_point) < p2.distance(reference_point) else p1
 
     def get_point_along_line(
         self, start_point: QgsPointXY, feature: QgsFeature, distance: float
     ) -> QgsPointXY | None:
-        """Get a point at a specific distance from the start point along a feature."""
+        """Get a point at a specific distance from the start point along a feature.
+
+        Args:
+            start_point: The starting point on the line.
+            feature: The line feature.
+            distance: The distance to move along the line.
+
+        Returns:
+            The calculated point, or None if the other endpoint cannot be found.
+        """
         other_endpoint: QgsPointXY | None = self.get_other_endpoint(
             feature, start_point
         )

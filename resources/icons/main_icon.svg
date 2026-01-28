@@ -154,12 +154,12 @@
      showgrid="false"
      inkscape:snap-grids="true"
      inkscape:zoom="4"
-     inkscape:cx="76.125"
+     inkscape:cx="76.000001"
      inkscape:cy="17.625"
      inkscape:window-width="2560"
      inkscape:window-height="1351"
-     inkscape:window-x="2551"
-     inkscape:window-y="-9"
+     inkscape:window-x="-9"
+     inkscape:window-y="-4"
      inkscape:window-maximized="1"
      inkscape:current-layer="svg46"
      inkscape:object-paths="true"
@@ -213,15 +213,8 @@
        x="110.93963"
        y="453.98166" />
   </g>
-  <text
-     xml:space="preserve"
-     style="font-weight:bold;font-size:84.6837px;font-family:'Century Gothic';-inkscape-font-specification:'Century Gothic Bold';text-align:start;writing-mode:lr-tb;direction:ltr;text-anchor:start;fill:#9d1718;fill-opacity:1;stroke-width:7.02723"
-     x="-4.2352395"
-     y="62.444775"
-     id="text2"><tspan
-       sodipodi:role="line"
-       id="tspan1"
-       x="-4.2352395"
-       y="62.444775"
-       style="stroke-width:7.02723">FW</tspan></text>
+  <path
+     id="text1"
+     style="font-weight:bold;font-size:64px;font-family:Arial;-inkscape-font-specification:'Arial Bold';text-align:start;writing-mode:lr-tb;direction:ltr;text-anchor:start;white-space:pre;inline-size:93.7852;fill:#9d1718;fill-opacity:1;stroke:none;stroke-width:3.30524"
+     d="M 10.438616,5.444599 0,60 H 11.219457 L 17.83606,25.545909 30.535009,60 H 40.685946 L 53.54928,25.545909 60.042593,60 H 71.138761 L 60.946727,5.444599 H 49.850557 L 35.672123,43.496157 21.699172,5.444599 Z m 69.946951,0 V 60 H 113.38639 V 49.800995 H 91.81051 v -14.35278 h 21.57588 V 25.471734 H 91.81051 v -9.865218 h 21.57588 V 5.444599 Z" />
 </svg>

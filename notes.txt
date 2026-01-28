@@ -7,39 +7,37 @@ Notes:
     Create the symbolic link using the "mklink /D" command. 
     The format is: mklink /D <Link_Path> <Target_Path>
 
-    mklink /D "C:\Users\**USER_NAME**\AppData\Roaming\QGIS\QGIS3\profiles\default\python\plugins\**PLUGIN_NAME**_dev" "C:\**DEV_DIRECTORY**\**PLUGIN_NAME**"
-
-
-  * Compile the resources file using pyrcc5
-
-	  use "cd PATH_TO_PLUGIN" in the OSGeo4W Shell and execute "compile.bat"
-
+    mklink /D "C:\Users\**USER_NAME**\AppData\Roaming\QGIS\QGIS**X**\profiles\default\python\plugins\**PLUGIN_NAME**_dev" "C:\**DEV_DIRECTORY**\**PLUGIN_NAME**"
 
 
   * Translation Workflow
     
-    1. Compile the Translation by using compile.bat found in the root directory in the OSGeo4W Shell. 
-    The pylupdate5 command inside the script will find all your new strings and add them to i18n/de.ts. 
+    Compile the Translation by running compile.bat found in the root directory in the OSGeo4W Shell. 
+      - Open the OSGeo4W Shell (from the Windows start menu)
+      - `cd **PATH_TO_PLUGIN**`
+      - `compile.bat`
 
-    2. Open the Qt Linguist application by usint the command "linguist" in a OSGeo4W Shell. 
-    In Linguist, open the de.ts file in the i18n directory. 
-    For each English string, you can enter the corresponding German translation. Save your changes in Linguist.
-    
-    3. Run the compile.bat file again
-    The lrelease command in the script will take your updated de.ts file and create the final i18n/de.qm file.
+    This finds all the strings to translat in the code and 
+    opens linguist so the translations can be edited. 
+    After closing linguist, it will compile the translations.
+
+    If linguist doesn't open or lrelease is not installed, 
+    go to OSGeo4W setup and install "qt6-devel" (in the "Libs" section)
 
 
-  * Publishing New Versions (Automated)
+  * Publishing New Versions
 
     1. Update the `version` number and changelog in `metadata.txt`. 
 
-    2. Run the release script from the OSGeo4W Shell in the plugin directory using the following commands:
+    2. Run the release script from the OSGeo4W Shell 
+       in the plugin directory using the following commands:
        
-       `cd **PATH_TO_PLUGIN**`
-       `python release.py`
+      `cd **PATH_TO_PLUGIN**`
+      `python release.py`
        
-       This script will update `plugins.xml`, compile resources, and package the new .zip file.
-       The .zip file and plugins.xml will be saved to the shared repo (see `download_url_base` in metadata.txt).
+      This script will update `plugins.xml` and package the new .zip file.
+      The .zip file and plugins.xml will be saved to the shared repo 
+      (see `download_url_base` in metadata.txt).
 
 
 For more information, see the PyQGIS Developer Cookbook at:
