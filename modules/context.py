@@ -4,14 +4,66 @@ This module contains the PluginContext class, which serves as a centralized
 access point for shared plugin objects such as the QGIS interface, the
 current project, and the plugin directory.
 """
-# pylint: disable=import-outside-toplevel
-# ruff: noqa: PLC0415, PLR2004
 
+import inspect
 from pathlib import Path
+from types import FrameType
+from typing import Final, NoReturn
 
-from qgis.core import Qgis, QgsProject
+from qgis.core import Qgis, QgsMessageLog, QgsProject
 from qgis.gui import QgisInterface, QgsMessageBar
 from qgis.PyQt.QtCore import QT_VERSION_STR, QCoreApplication
+
+# A value of 128 is used as a threshold for determining if a color is "dark".
+# This is based on the color's luminance, where values closer to 0 are darker
+# and values closer to 255 are lighter.
+DARK_THEME_LUMINANCE_THRESHOLD: Final[int] = 128
+
+
+def file_line(frame: FrameType | None) -> str:
+    """Return the filename and line number of the caller.
+
+    This function inspects the call stack to determine the file and line number
+    from which `log_debug` or `log_and_show_error` was called.
+
+    Args:
+        frame: The current frame object,
+            typically obtained via `inspect.currentframe()`.
+
+    Returns:
+        A string formatted as " (filename: line_number)" or an empty string if
+        the frame information is not available.
+    """
+    if frame and frame.f_back:
+        filename: str = Path(frame.f_back.f_code.co_filename).name
+        lineno: int = frame.f_back.f_lineno
+        return f" [{filename}: {lineno}]"
+    return ""
+
+
+class ContextRuntimeError(Exception):
+    """Custom exception for runtime errors in the context module."""
+
+
+def raise_context_runtime_error(error_msg: str) -> NoReturn:
+    """Log a critical error, display it, and raise a ContextRuntimeError.
+
+    Args:
+        error_msg: The error message to be displayed and raised.
+
+    Raises:
+        ContextRuntimeError: The raised exception with the error message.
+    """
+    file_line_number: str = file_line(inspect.currentframe())
+    error_msg = f"{error_msg}{file_line_number}"
+    QgsMessageLog.logMessage(
+        message=f"💀 {error_msg}",
+        tag="UTEC Plugin ERROR",
+        level=Qgis.Critical,
+        notifyUser=True,
+    )
+
+    raise ContextRuntimeError(error_msg)
 
 
 class PluginContext:
@@ -36,15 +88,13 @@ class PluginContext:
         """Get the QGIS interface.
 
         Returns:
-            QgisInterface: The QGIS interface instance.
+            The QGIS interface instance.
 
         Raises:
-            CustomRuntimeError: If the context has not been initialized.
+            ContextRuntimeError: If the context has not been initialized.
         """
-        from .logs_and_errors import raise_runtime_error
-
         if cls._iface is None:
-            raise_runtime_error("PluginContext not initialized with iface.")
+            raise_context_runtime_error("PluginContext not initialized with iface.")
         return cls._iface
 
     @classmethod
@@ -52,16 +102,14 @@ class PluginContext:
         """Return the current QGIS project instance.
 
         Returns:
-            QgsProject: The current QGIS project.
+            The current QGIS project.
 
         Raises:
-            CustomRuntimeError: If no QGIS project is currently open.
+            ContextRuntimeError: If no QGIS project is currently open.
         """
-        from .logs_and_errors import raise_runtime_error
-
         project: QgsProject | None = QgsProject.instance()
         if project is None:
-            raise_runtime_error("No QGIS project is currently open.")
+            raise_context_runtime_error("No QGIS project is currently open.")
         return project
 
     @classmethod
@@ -69,7 +117,7 @@ class PluginContext:
         """Get the QGIS message bar.
 
         Returns:
-            QgsMessageBar | None: The QGIS message bar or None if not available.
+            The QGIS message bar or None if not available.
         """
         return cls._iface.messageBar() if cls._iface else None
 
@@ -78,15 +126,15 @@ class PluginContext:
         """Get the plugin directory.
 
         Returns:
-            Path: The absolute path to the plugin directory.
+            The absolute path to the plugin directory.
 
         Raises:
-            CustomRuntimeError: If the context has not been initialized.
+            ContextRuntimeError: If the context has not been initialized.
         """
-        from .logs_and_errors import raise_runtime_error
-
         if cls._plugin_dir is None:
-            raise_runtime_error("PluginContext not initialized with plugin_dir.")
+            raise_context_runtime_error(
+                "PluginContext not initialized with plugin_dir."
+            )
         return cls._plugin_dir
 
     @classmethod
@@ -94,7 +142,7 @@ class PluginContext:
         """Get the resources directory path.
 
         Returns:
-            Path: The absolute path to the resources directory.
+            The absolute path to the resources directory.
         """
         return cls.plugin_dir() / "resources"
 
@@ -103,7 +151,7 @@ class PluginContext:
         """Get the icons directory path.
 
         Returns:
-            Path: The absolute path to the icons directory.
+            The absolute path to the icons directory.
         """
         return cls.resources_path() / "icons"
 
@@ -112,7 +160,7 @@ class PluginContext:
         """Get the templates directory path.
 
         Returns:
-            Path: The absolute path to the templates directory.
+            The absolute path to the templates directory.
         """
         return cls.resources_path() / "templates"
 
@@ -121,18 +169,19 @@ class PluginContext:
         r"""Get the file path of the current QGIS project.
 
         Returns:
-            Path: The path to the current QGIS project file
-                (e.g., 'C:\project\my_project.qgz').
-        """
-        from .logs_and_errors import raise_user_error
+            The path to the current QGIS project file (e.g.,
+            'C:\project\my_project.qgz').
 
+        Raises:
+            ContextRuntimeError: If the project has not been saved.
+        """
         project: QgsProject = cls.project()
         project_path: str = project.fileName()
         if not project_path:
-            # fmt: off
-            msg: str = QCoreApplication.translate("UserError", "Project is not saved. Please save the project first.")  # noqa: E501
-            # fmt: on
-            raise_user_error(msg)
+            msg: str = QCoreApplication.translate(
+                "UserError", "Project is not saved. Please save the project first."
+            )
+            raise_context_runtime_error(msg)
 
         return Path(project_path)
 
@@ -140,10 +189,11 @@ class PluginContext:
     def project_gpkg(cls) -> Path:
         """Return the expected GeoPackage path for the current project.
 
-        Example: for a project 'my_project.qgz', returns 'my_project.gpkg'.
+        Example:
+            For a project 'my_project.qgz', returns 'my_project.gpkg'.
 
         Returns:
-             Path: The Path object to the GeoPackage.
+             The Path object to the GeoPackage.
         """
         return cls.project_path().with_suffix(".gpkg")
 
@@ -152,28 +202,33 @@ class PluginContext:
         """Check if QGIS is running with a dark theme.
 
         Returns:
-            bool: True if the theme is dark, False otherwise.
+            True if the theme is dark, False otherwise.
         """
         iface: QgisInterface = cls.iface()
         window = iface.mainWindow()
-        bg_color = window.palette().color(window.backgroundRole())  # pyright: ignore[reportOptionalMemberAccess]
+        if not window:
+            return False
 
-        return bg_color.value() < 128
+        bg_color = window.palette().color(window.backgroundRole())
+
+        return bg_color.value() < DARK_THEME_LUMINANCE_THRESHOLD
 
     @staticmethod
     def is_qgis4() -> bool:
         """Check if running on QGIS 4.
 
         Returns:
-            bool: True if running on QGIS 4 or newer, False otherwise.
+            True if running on QGIS 4 or newer, False otherwise.
         """
-        return Qgis.QGIS_VERSION_INT // 10000 >= 4
+        # QGIS_VERSION_INT is structured as MMmmpp (e.g., 31609 for 3.16.9).
+        # Integer division by 10000 extracts the major version number.
+        return Qgis.QGIS_VERSION_INT // 10000 >= 4  # noqa: PLR2004
 
     @staticmethod
     def is_qt6() -> bool:
         """Check if running on Qt 6.
 
         Returns:
-            bool: True if running on Qt 6 or newer, False otherwise.
+            True if running on Qt 6 or newer, False otherwise.
         """
-        return int(QT_VERSION_STR.split(".")[0]) >= 6
+        return int(QT_VERSION_STR.split(".")[0]) >= 6  # noqa: PLR2004
