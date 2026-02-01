@@ -1,6 +1,0 @@
-{
-    "python.defaultInterpreterPath": "C:\\OSGeo4W\\apps\\Python312\\python.exe",
-    "pylint.args": [
-        "--rcfile=${workspaceFolder}/.pylintrc"
-    ]
-}
