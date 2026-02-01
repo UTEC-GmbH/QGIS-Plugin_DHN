@@ -1,0 +1,189 @@
+[tool.mypy]
+
+[[tool.mypy.overrides]]
+module = "qgis.PyQt.QtCore"
+ignore_missing_imports = true
+
+[tool.pyright]
+reportAttributeAccessIssue = "none"
+reportMissingImports = "warning"
+reportMissingModuleSource = "none"
+reportGeneralTypeIssues = "none"
+reportPrivateImportUsage = "none"
+extraPaths = [
+    "C:\\OSGeo4W\\apps\\qgis-ltr\\python",
+    "C:\\OSGeo4W\\apps\\qgis-ltr\\python\\plugins",
+    "C:\\OSGeo4W\\apps\\Python312\\Lib\\site-packages",
+]
+
+[tool.pylint.main]
+analyse-fallback-blocks = false
+clear-cache-post-run = false
+extension-pkg-allow-list = [
+    "qgis",
+    "qgis.core",
+    "qgis.gui",
+    "osgeo",
+    "PyQt5",
+    "PyQt5.QtCore",
+    "PyQt5.QtGui",
+    "PyQt5.QtWidgets",
+    "PyQt6",
+    "PyQt6.QtCore",
+    "PyQt6.QtGui",
+    "PyQt6.QtWidgets",
+    "qgis.PyQt.QtCore",
+    "qgis.PyQt.QtWidgets"
+]
+fail-under = 10
+ignore = ["CVS"]
+ignored-modules = ["qgis.core", "qgis.gui", "qgis.PyQt.QtCore"]
+init-hook = 'import sys; import os; from pathlib import Path; qgis_path = Path("C:/OSGeo4W/apps/qgis-ltr"); python_path = Path("C:/OSGeo4W/apps/Python312"); sys.path.append(str(qgis_path)); sys.path.append(str(qgis_path / "python")); sys.path.append(str(qgis_path / "python" / "plugins")); sys.path.append(str(python_path / "Lib" / "site-packages")); os.environ["PATH"] += f";{str(qgis_path / "bin")};C:/OSGeo4W/bin"'
+jobs = 1
+limit-inference-results = 100
+persistent = true
+prefer-stubs = false
+py-version = "3.13"
+recursive = false
+suggestion-mode = true
+unsafe-load-any-extension = true
+
+[tool.pylint.basic]
+argument-naming-style = "snake_case"
+attr-naming-style = "snake_case"
+bad-names = ["foo", "bar", "baz", "toto", "tutu", "tata"]
+class-attribute-naming-style = "any"
+class-const-naming-style = "UPPER_CASE"
+class-naming-style = "PascalCase"
+const-naming-style = "UPPER_CASE"
+docstring-min-length = -1
+function-naming-style = "snake_case"
+good-names = ["i", "j", "k", "ex", "Run", "_"]
+include-naming-hint = false
+inlinevar-naming-style = "any"
+method-naming-style = "snake_case"
+module-naming-style = "snake_case"
+no-docstring-rgx = "^_"
+property-classes = ["abc.abstractproperty"]
+variable-naming-style = "snake_case"
+
+[tool.pylint.classes]
+check-protected-access-in-special-methods = false
+defining-attr-methods = ["__init__", "__new__", "setUp", "asyncSetUp", "__post_init__"]
+exclude-protected = ["_asdict", "_fields", "_replace", "_source", "_make", "os._exit"]
+valid-classmethod-first-arg = ["cls"]
+valid-metaclass-classmethod-first-arg = ["mcs"]
+
+[tool.pylint.design]
+max-args = 5
+max-attributes = 7
+max-bool-expr = 5
+max-branches = 12
+max-locals = 15
+max-parents = 7
+max-positional-arguments = 5
+max-public-methods = 20
+max-returns = 6
+max-statements = 50
+min-public-methods = 2
+
+[tool.pylint.exceptions]
+overgeneral-exceptions = ["builtins.BaseException", "builtins.Exception"]
+
+[tool.pylint.format]
+indent-after-paren = 4
+indent-string = "    "
+max-line-length = 100
+max-module-lines = 1000
+single-line-class-stmt = false
+single-line-if-stmt = false
+ignore-long-lines = "^\\s*(# )?<?https?://\\S+>?$"
+
+[tool.pylint.imports]
+allow-reexport-from-package = false
+allow-wildcard-with-all = false
+known-third-party = ["enchant"]
+
+[tool.pylint.logging]
+logging-format-style = "old"
+logging-modules = ["logging"]
+
+[tool.pylint."messages control"]
+confidence = ["HIGH", "CONTROL_FLOW", "INFERENCE", "INFERENCE_FAILURE", "UNDEFINED"]
+disable = [
+    "raw-checker-failed",
+    "bad-inline-option",
+    "locally-disabled",
+    "file-ignored",
+    "suppressed-message",
+    "useless-suppression",
+    "deprecated-pragma",
+    "use-symbolic-message-instead",
+    "use-implicit-booleaness-not-comparison-to-string",
+    "use-implicit-booleaness-not-comparison-to-zero",
+    "line-too-long",
+    "missing-module-docstring",
+    "import-error",
+    "non-ascii-file-name",
+    "wrong-import-order",
+    "trailing-whitespace",
+    "missing-function-docstring",
+    "unspecified-encoding",
+    "too-many-arguments",
+    "too-many-instance-attributes",
+    "no-member",
+    "fixme",
+    "C0103",
+    "W0105",
+]
+
+[tool.pylint.method_args]
+timeout-methods = ["requests.api.delete", "requests.api.get", "requests.api.head", "requests.api.options", "requests.api.patch", "requests.api.post", "requests.api.put", "requests.api.request"]
+
+[tool.pylint.miscellaneous]
+notes = ["FIXME", "XXX", "TODO"]
+
+[tool.pylint.refactoring]
+max-nested-blocks = 5
+never-returning-functions = ["sys.exit", "argparse.parse_error"]
+suggest-join-with-non-empty-separator = true
+
+[tool.pylint.reports]
+evaluation = "max(0, 0 if fatal else 10.0 - ((float(5 * error + warning + refactor + convention) / statement) * 10))"
+reports = false
+score = true
+
+[tool.pylint.similarities]
+ignore-comments = true
+ignore-docstrings = true
+ignore-imports = true
+ignore-signatures = true
+min-similarity-lines = 4
+
+[tool.pylint.spelling]
+max-spelling-suggestions = 4
+spelling-ignore-comment-directives = ["fmt: on", "fmt: off", "noqa:", "noqa", "nosec", "isort:skip", "mypy:"]
+spelling-store-unknown-words = false
+
+[tool.pylint.string]
+check-quote-consistency = false
+check-str-concat-over-line-jumps = false
+
+[tool.pylint.typecheck]
+contextmanager-decorators = ["contextlib.contextmanager"]
+ignore-none = true
+ignore-on-opaque-inference = true
+ignored-checks-for-mixins = ["no-member", "not-async-context-manager", "not-context-manager", "attribute-defined-outside-init"]
+ignored-classes = ["optparse.Values", "thread._local", "_thread._local", "argparse.Namespace"]
+missing-member-hint = true
+missing-member-hint-distance = 1
+missing-member-max-choices = 1
+mixin-class-rgx = ".*[Mm]ixin"
+
+[tool.pylint.variables]
+allow-global-unused-variables = true
+callbacks = ["cb_", "_cb"]
+dummy-variables-rgx = "_+$|(_[a-zA-Z0-9_]*[a-zA-Z0-9]+?$)|dummy|^ignored_|^unused_"
+ignored-argument-names = "_.*|^ignored_|^unused_"
+init-import = false
+redefining-builtins-modules = ["six.moves", "past.builtins", "future.builtins", "builtins", "io"]

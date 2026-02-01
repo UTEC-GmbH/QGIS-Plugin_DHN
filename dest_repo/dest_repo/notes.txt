@@ -12,8 +12,7 @@ Notes:
 
   * Translation Workflow
     
-    Compile the Translation by running compile.bat (found in the root directory) 
-    in the OSGeo4W Shell. 
+    Compile the Translation by running compile.bat found in the root directory in the OSGeo4W Shell. 
       - Open the OSGeo4W Shell (from the Windows start menu)
       - `cd **PATH_TO_PLUGIN**`
       - `compile.bat`
@@ -39,3 +38,7 @@ Notes:
       This script will update `plugins.xml` and package the new .zip file.
       The .zip file and plugins.xml will be saved to the shared repo 
       (see `download_url_base` in metadata.txt).
+
+
+For more information, see the PyQGIS Developer Cookbook at:
+http://www.qgis.org/pyqgis-cookbook/index.html
