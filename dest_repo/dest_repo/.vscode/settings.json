@@ -1,17 +1,5 @@
 {
-    "python.analysis.extraPaths": [
-        "C:\\OSGeo4W\\apps\\qgis-ltr\\python",
-        "C:\\OSGeo4W\\apps\\qgis-ltr\\python\\plugins",
-        "C:\\OSGeo4W\\apps\\Python312",
-        "C:\\OSGeo4W\\apps\\Python312\\Lib\\site-packages"
-    ],
-    "python.autoComplete.extraPaths": [
-        "C:\\OSGeo4W\\apps\\qgis-ltr\\python",
-        "C:\\OSGeo4W\\apps\\qgis-ltr\\python\\plugins",
-        "C:\\OSGeo4W\\apps\\Python312",
-        "C:\\OSGeo4W\\apps\\Python312\\Lib\\site-packages"
-    ],
-    "python.envFile": "${workspaceFolder}/.env",
+    "python.defaultInterpreterPath": "C:\\OSGeo4W\\apps\\Python312\\python.exe",
     "pylint.args": [
         "--rcfile=${workspaceFolder}/.pylintrc"
     ]
