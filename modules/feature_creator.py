@@ -12,7 +12,7 @@ from qgis.core import (
 )
 from qgis.PyQt.QtCore import QCoreApplication
 
-from .constants import Names, NewLayerFields, Numbers, PipeDimensions
+from .constants import FittingType, NewPointLayerFields, Numbers, PipeDimensions
 from .logs_and_errors import log_debug
 from .vector_analysis_tools import VectorAnalysisTools
 
@@ -64,11 +64,11 @@ class FeatureCreator(VectorAnalysisTools):
             return 0
 
         attrs: dict[str, str | None] = {
-            NewLayerFields.type.name: Names.attr_val_type_question
+            NewPointLayerFields.type.field_name: FittingType.QUESTIONABLE.translated
         }
         attrs |= self.get_connected_attributes(features)
         if note:
-            attrs[NewLayerFields.notes.name] = note
+            attrs[NewPointLayerFields.notes.field_name] = note
         return 1 if self.create_feature(QgsGeometry.fromPointXY(point), attrs) else 0
 
     def create_house_connection(
@@ -83,8 +83,18 @@ class FeatureCreator(VectorAnalysisTools):
         Returns:
             1 if the feature was created successfully, 0 otherwise.
         """
-        attrs: dict = {NewLayerFields.type.name: Names.attr_val_type_house}
+        attrs: dict = {
+            NewPointLayerFields.type.field_name: FittingType.HOUSE_CONN.translated
+        }
         attrs |= self.get_connected_attributes(features)
+
+        # Get load value if the load field was found
+        if self.load_field_name and len(features) == 1:
+            feat: QgsFeature = features[0]
+            attrs[NewPointLayerFields.load.field_name] = feat.attribute(
+                self.load_field_name
+            )
+
         return 1 if self.create_feature(QgsGeometry.fromPointXY(point), attrs) else 0
 
     def create_bend(
@@ -109,14 +119,14 @@ class FeatureCreator(VectorAnalysisTools):
             return 0
 
         attrs: dict = {
-            NewLayerFields.type.name: Names.attr_val_type_bend,
-            NewLayerFields.angle.name: round(angle),
+            NewPointLayerFields.type.field_name: FittingType.BEND.translated,
+            NewPointLayerFields.angle.field_name: round(angle),
         }
         attrs |= self.get_connected_attributes(features)
         if note:
-            attrs[NewLayerFields.notes.name] = note
+            attrs[NewPointLayerFields.notes.field_name] = note
 
-        attrs.pop(NewLayerFields.dim_2.name, None)
+        attrs.pop(NewPointLayerFields.dim_2.field_name, None)
         return 1 if self.create_feature(QgsGeometry.fromPointXY(point), attrs) else 0
 
     def create_t_piece(
@@ -142,8 +152,8 @@ class FeatureCreator(VectorAnalysisTools):
         """
         all_features: list[QgsFeature] = [*main_pipe, connecting_pipe]
         attrs: dict = {
-            NewLayerFields.type.name: Names.attr_val_type_t_piece,
-            NewLayerFields.notes.name: note,
+            NewPointLayerFields.type.field_name: FittingType.T_PIECE.translated,
+            NewPointLayerFields.notes.field_name: note,
         }
         attrs |= self.get_connected_attributes(all_features)
 
@@ -158,8 +168,8 @@ class FeatureCreator(VectorAnalysisTools):
             conn_dim: int | None = connecting_pipe.attribute(self.dim_field_name)
 
             if main_dims and conn_dim is not None:
-                attrs[NewLayerFields.dim_1.name] = main_dims[-1]
-                attrs[NewLayerFields.dim_2.name] = conn_dim
+                attrs[NewPointLayerFields.dim_1.field_name] = main_dims[-1]
+                attrs[NewPointLayerFields.dim_2.field_name] = conn_dim
 
         return 1 if self.create_feature(QgsGeometry.fromPointXY(point), attrs) else 0
 
@@ -231,10 +241,10 @@ class FeatureCreator(VectorAnalysisTools):
 
             reducer_attrs: dict = self.get_connected_attributes([smaller_dim_feature])
             reducer_attrs |= {
-                NewLayerFields.type.name: Names.attr_val_type_reducer,
-                NewLayerFields.dim_1.name: dim_from,
-                NewLayerFields.dim_2.name: dim_to,
-                NewLayerFields.notes.name: note_text,
+                NewPointLayerFields.type.field_name: FittingType.REDUCER.translated,
+                NewPointLayerFields.dim_1.field_name: dim_from,
+                NewPointLayerFields.dim_2.field_name: dim_to,
+                NewPointLayerFields.notes.field_name: note_text,
             }
 
             created_count += self.create_feature(

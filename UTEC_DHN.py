@@ -32,6 +32,7 @@ from .modules.logs_and_errors import (
     raise_user_error,
     show_message,
 )
+from .modules.pipe_classifier import PipeClassifier
 from .modules.poi_classifier import PointOfInterestClassifier
 
 if TYPE_CHECKING:
@@ -150,11 +151,11 @@ class DHN(QObject):
         self._modify_svg_path(add=True)
 
         self.layer_manager = LayerManager(self.project, self.iface)
-        # Add an action for running the Material Take-off
+        # Add an action for running the main functions
         # fmt: off
         # ruff: noqa: E501
-        button: str = QCoreApplication.translate("Menu_Button", "Run Material Take-off")
-        tool_tip_text: str = QCoreApplication.translate("Menu_ToolTip", "<p><b>Material Take-off for the selected layer</b></p><p><span style='font-weight:normal; font-style:normal;'>The Material Take-off will be calculated for the selected layer. The selected layer needs to be a line layer.</span></p>")
+        button: str = QCoreApplication.translate("Menu_Button", "Run Analysis")
+        tool_tip_text: str = QCoreApplication.translate("Menu_ToolTip", "<p><b>Material Take-off and network analysis for the selected layer</b></p><p><span style='font-weight:normal; font-style:normal;'>The selected layer needs to be a line layer.</span></p>")
         # fmt: on
         mto_action = self.add_action(
             icon=ICONS.main_menu_run,
@@ -171,7 +172,7 @@ class DHN(QObject):
         # fmt: off
         # ruff: noqa: E501
         button: str = QCoreApplication.translate("Menu_Button", "Re-do the Excel output")
-        tool_tip_text: str = QCoreApplication.translate("Menu_ToolTip", "<p><b>Re-do the Excel output</b></p><p><span style='font-weight:normal; font-style:normal;'>After manual changes to the Material-Take-off-layer, the Excel output needs to be updated. Select the result layer and click this button. The Excel output will be updated.</span></p>")
+        tool_tip_text: str = QCoreApplication.translate("Menu_ToolTip", "<p><b>Re-do the Excel output</b></p><p><span style='font-weight:normal; font-style:normal;'>After manual changes to the new layers, the Excel output needs to be updated. Select the result layers and click this button. The Excel output will be updated.</span></p>")
         # fmt: on
         excel_action = self.add_action(
             icon=ICONS.main_menu_excel,
@@ -316,7 +317,7 @@ class DHN(QObject):
                 finder.find_features(progress_bar, update_text)
 
                 # Copy features from the temporary layer to the final layer
-                new_layer: QgsVectorLayer = self.layer_manager.new_layer
+                new_layer: QgsVectorLayer = self.layer_manager.new_point_layer
                 self.layer_manager.copy_features_to_layer(
                     source_layer=temp_point_layer,
                     target_layer=new_layer,
@@ -327,8 +328,16 @@ class DHN(QObject):
                 # --- Remove duplicates from the final layer ---
                 DuplicateFilter().remove_duplicates(new_layer)
 
+                # --- Identify House Connection Pipes ---
+                # fmt: off
+                update_text(QCoreApplication.translate("progress_bar", "Classifying pipes..."))
+                # fmt: on
+                pipe_layer_copy: QgsVectorLayer = self.layer_manager.create_line_layer()
+                classifier = PipeClassifier(pipe_layer_copy, new_layer)
+                classifier.classify_pipes()
+
                 # --- Log and display result summary ---
-                self.layer_manager.set_layer_style(new_layer)
+                self.layer_manager.set_point_layer_style(new_layer)
                 summary_single_line: str = create_summary_message(
                     new_layer, reprojected_layer.name(), multiline=False
                 )
@@ -337,7 +346,7 @@ class DHN(QObject):
                 )
 
                 # --- Export results to XLSX for Excel ---
-                ExcelExporter().export_results(new_layer, reprojected_layer)
+                ExcelExporter().export_results(new_layer, pipe_layer_copy)
 
                 log_debug(
                     summary_single_line,
@@ -398,12 +407,10 @@ class DHN(QObject):
         """Rerun the Excel export for a manually edited result layer.
 
         This function takes the currently selected result layer (which must be a
-        point layer ending with the plugin's suffix) and re-exports its data to
-        an Excel file. It also finds the original source line layer to include
-        route lengths.
+        point layer ending with the plugin's suffix), finds the corresponding
+        pipe layer, and re-exports data from both to an Excel file.
         """
         log_debug("... Rerunning Excel output ...", icon="✨✨✨")
-        reprojected_layer_excel: QgsVectorLayer | None = None
 
         if not self.layer_manager:
             raise_runtime_error("Layer manager is not initialized.")
@@ -424,17 +431,28 @@ class DHN(QObject):
             result_layer = selected_nodes[0].layer()
             if not isinstance(
                 result_layer, QgsVectorLayer
-            ) or not result_layer.name().endswith(Names.new_layer_suffix):
+            ) or not result_layer.name().endswith(Names.new_fittings_layer_suffix):
                 # fmt: off
                 ue_msg: str = QCoreApplication.translate("UserError", "The selected layer is not a valid result layer from this plugin.")
                 # fmt: on
                 raise_user_error(ue_msg)
 
-            # 2. Find the original source line layer to get line lengths.
-            reprojected_layer_excel = self.layer_manager.find_source_layer(result_layer)
+            # 2. Find the corresponding pipe layer.
+            base_name: str = result_layer.name().removesuffix(
+                Names.new_fittings_layer_suffix
+            )
+            pipe_layer_name: str = f"{base_name}{Names.new_pipe_layer_suffix}"
+            pipe_layers = self.project.mapLayersByName(pipe_layer_name)
+
+            if not pipe_layers:
+                raise_runtime_error(
+                    "Could not find the corresponding pipe layer for export."
+                )
+
+            pipe_layer: QgsVectorLayer = pipe_layers[0]
 
             # 3. Export the results.
-            ExcelExporter().export_results(result_layer, reprojected_layer_excel)
+            ExcelExporter().export_results(result_layer, pipe_layer)
 
             show_message(
                 QCoreApplication.translate("summary", "Excel export has been updated."),
@@ -451,10 +469,3 @@ class DHN(QObject):
                 f"An unexpected error occurred during Excel export: {e!s}",
                 level=Qgis.Critical,
             )
-
-        finally:
-            # Clean up the temporary reprojected layer
-            project: QgsProject | None = QgsProject.instance()
-            if reprojected_layer_excel is not None and project is not None:
-                project.removeMapLayer(reprojected_layer_excel.id())
-                log_debug("In-memory copy of the source layer removed (rerun).")

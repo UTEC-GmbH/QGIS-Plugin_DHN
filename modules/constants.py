@@ -3,11 +3,13 @@
 This module contains constant values.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from qgis.core import QgsApplication, QgsSvgCache
+from qgis.PyQt.QtCore import QCoreApplication
 from qgis.PyQt.QtCore import QMetaType as Qmt
 from qgis.PyQt.QtGui import QColor, QIcon, QPixmap
 
@@ -33,6 +35,27 @@ else:
     QMT_Double = Qmt.Double
 
 PROBLEMATIC_FIELD_TYPES: list = [QMT_Map, QMT_List, QMT_StringList]
+
+
+T = TypeVar("T")
+
+
+class ClassProperty(Generic[T]):
+    """A decorator that converts a method into a read-only class property."""
+
+    def __init__(self, fget: Callable[[Any], T]) -> None:
+        """Initialize the class property."""
+        self.fget: Callable[[Any], T] = fget
+
+    def __get__(self, instance: object | None, owner: type | None = None) -> T:
+        """Return the value of the property."""
+        return self.fget(owner)
+
+
+def QT_TRANSLATE_NOOP(context: str, source: str) -> str:  # noqa: N802
+    """Mark a string for translation without translating it immediately."""
+    _: str = context
+    return source
 
 
 # pylint: disable=too-few-public-methods
@@ -121,6 +144,42 @@ class Icons:
 ICONS = Icons()
 
 
+class FittingType(Enum):
+    """Enumeration for the different types of fittings (points of interest).
+
+    The value of each member is the string representation
+    used in the attribute table.
+    """
+
+    HOUSE_CONN: str = QT_TRANSLATE_NOOP("cont_FittingType", "House-Connection")
+    BEND: str = QT_TRANSLATE_NOOP("cont_FittingType", "Bend")
+    T_PIECE: str = QT_TRANSLATE_NOOP("cont_FittingType", "T-Piece")
+    CONNECTOR: str = QT_TRANSLATE_NOOP("cont_FittingType", "Connector")
+    REDUCER: str = QT_TRANSLATE_NOOP("cont_FittingType", "Reducer")
+    QUESTIONABLE: str = QT_TRANSLATE_NOOP("cont_FittingType", "Questionable")
+
+    @property
+    def translated(self) -> str:
+        """Return the translated string representation of the fitting type."""
+        return QCoreApplication.translate("cont_FittingType", self.value)
+
+
+class PipeType(Enum):
+    """Enumeration for the different types of pipes.
+
+    The value of each member is the string representation
+    used in the attribute table.
+    """
+
+    MAIN: str = QT_TRANSLATE_NOOP("cont_PipeType", "Main Pipe")
+    CONN: str = QT_TRANSLATE_NOOP("cont_PipeType", "Connecting Pipe")
+
+    @property
+    def translated(self) -> str:
+        """Return the translated string representation of the pipe type."""
+        return QCoreApplication.translate("cont_PipeType", self.value)
+
+
 @dataclass(frozen=True)
 class PipeDimensions:
     """Class: PipeDimensions
@@ -171,39 +230,51 @@ class Colours:
     questionable: str = "#ff1d1d"
 
 
-@dataclass(frozen=True)
 class Names:
     """Class: Names
 
     This class contains names.
     """
 
-    new_layer_suffix: str = " - DHN"
     dim_prefix: str = "DN"
     line_separator: str = " / "
 
-    excel_dir: str = "UTEC_DHN"
-    excel_file_summary: str = "UTEC_DHN"
+    excel_dir: str = "UTEC"
     excel_file_output: str = "plugin_output"
-    excel_line_length: str = "Trassenlänge"
-    excel_dim: str = "Dimension"
+    excel_file_template: str = "UTEC_DHN.xlsx"
 
-    # Namen für Saplten der Attributtabelle des alten (gewälten) Layers
+    # Mögliche Namen für die Spalte mit den Rohrdimensionen
+    # in der Attributtabelle des alten (gewälten) Layers
     sel_layer_field_dim: tuple[str, ...] = (
         "diameter",
         "dim",
         "DN",
         "Dimension",
         "Durchmesser",
+        "p_diameter",
+        "p_diameter_DN",
     )
 
-    # Werte der Spalte 'Typ' in der Attributtabelle (Kategorien der DHN)
-    attr_val_type_house: str = "Hausanschluss"
-    attr_val_type_bend: str = "Bogen"
-    attr_val_type_t_piece: str = "T-Stück"
-    attr_val_type_connector: str = "Muffe"
-    attr_val_type_reducer: str = "Reduzierung"
-    attr_val_type_question: str = "Fragwürdiger Punkt"
+    sel_layer_field_load: tuple[str, ...] = (
+        "loadRel",
+        "p_load",
+        "p_load_rel",
+    )
+
+    @ClassProperty
+    def new_fittings_layer_suffix(self) -> str:
+        """Return the suffix for the new layer name."""
+        return QCoreApplication.translate("cont_Names", " - Material")
+
+    @ClassProperty
+    def new_pipe_layer_suffix(self) -> str:
+        """Return the suffix for the new pipe layer name."""
+        return QCoreApplication.translate("cont_Names", " - Net")
+
+    @ClassProperty
+    def excel_file_summary(self) -> str:
+        """Return the summary sheet name."""
+        return QCoreApplication.translate("cont_Names", "UTEC_Network")
 
 
 @dataclass(frozen=True)
@@ -235,19 +306,40 @@ class Numbers:
     new_layer_label_distance: float = 2.5
 
 
-class NewLayerFields(Enum):
+class NewPointLayerFields(Enum):
     """Constants for layer field attributes, accessible via dot notation.
 
     This Enum is directly iterable.
     """
 
-    # Enum members are defined as tuples: (display_name, qgis_data_type)
-    type: tuple[str, Qmt] = ("Typ", QMT_String)
-    dim_1: tuple[str, Qmt] = ("Dimension 1", QMT_Int)
-    dim_2: tuple[str, Qmt] = ("Dimension 2", QMT_Int)
-    angle: tuple[str, Qmt] = ("Bogen-Winkel", QMT_Int)
-    connected: tuple[str, Qmt] = ("Verbundene Leitungen", QMT_String)
-    notes: tuple[str, Qmt] = ("Anmerkungen", QMT_String)
+    type: tuple[str, Qmt] = (
+        QT_TRANSLATE_NOOP("cont_PointLayerFields", "Type"),
+        QMT_String,
+    )
+    dim_1: tuple[str, Qmt] = (
+        QT_TRANSLATE_NOOP("cont_PointLayerFields", "Diameter 1"),
+        QMT_Int,
+    )
+    dim_2: tuple[str, Qmt] = (
+        QT_TRANSLATE_NOOP("cont_PointLayerFields", "Diameter 2"),
+        QMT_Int,
+    )
+    angle: tuple[str, Qmt] = (
+        QT_TRANSLATE_NOOP("cont_PointLayerFields", "Bend-Angle"),
+        QMT_Int,
+    )
+    load: tuple[str, Qmt] = (
+        QT_TRANSLATE_NOOP("cont_PointLayerFields", "Load"),
+        QMT_Double,
+    )
+    connected: tuple[str, Qmt] = (
+        QT_TRANSLATE_NOOP("cont_PointLayerFields", "Connected Pipes"),
+        QMT_String,
+    )
+    notes: tuple[str, Qmt] = (
+        QT_TRANSLATE_NOOP("cont_PointLayerFields", "Notes"),
+        QMT_String,
+    )
 
     def __init__(self, display_name: str, q_type: Qmt) -> None:
         """Initialize the enum member with its attributes."""
@@ -255,9 +347,56 @@ class NewLayerFields(Enum):
         self._q_type: Qmt = q_type
 
     @property
-    def name(self) -> str:
+    def field_name(self) -> str:
         """The display name of the field."""
-        return self._display_name
+        return QCoreApplication.translate("cont_PointLayerFields", self._display_name)
+
+    @property
+    def data_type(self) -> Qmt:
+        """The QVariant type of the field."""
+        return self._q_type
+
+
+class NewLineLayerFields(Enum):
+    """Constants for pipe layer field attributes, accessible via dot notation.
+
+    This Enum is directly iterable.
+    """
+
+    org_id: tuple[str, Qmt] = (
+        QT_TRANSLATE_NOOP("cont_LineLayerFields", "Original ID"),
+        QMT_Int,
+    )
+    dim: tuple[str, Qmt] = (
+        QT_TRANSLATE_NOOP("cont_LineLayerFields", "Original Diameter"),
+        QMT_Int,
+    )
+    load: tuple[str, Qmt] = (
+        QT_TRANSLATE_NOOP("cont_LineLayerFields", "Original Load"),
+        QMT_Double,
+    )
+    length: tuple[str, Qmt] = (
+        QT_TRANSLATE_NOOP("cont_LineLayerFields", "Route length"),
+        QMT_Double,
+    )
+    type: tuple[str, Qmt] = (
+        QT_TRANSLATE_NOOP("cont_LineLayerFields", "Type"),
+        QMT_String,
+    )
+    designation: tuple[str, Qmt] = (
+        QT_TRANSLATE_NOOP("cont_LineLayerFields", "Designation"),
+        QMT_String,
+    )
+
+    def __init__(self, display_name: str, q_type: Qmt) -> None:
+        """Initialize the enum member with its attributes."""
+        self._display_name: str = display_name
+        self._q_type: Qmt = q_type
+
+    @property
+    def field_name(self) -> str:
+        """The display name of the field."""
+        return QCoreApplication.translate("cont_LineLayerFields", self._display_name)
 
     @property
     def data_type(self) -> Qmt:

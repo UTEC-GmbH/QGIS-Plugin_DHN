@@ -11,7 +11,7 @@ from typing import NoReturn
 from qgis.core import Qgis, QgsMessageLog, QgsVectorLayer
 from qgis.PyQt.QtCore import QCoreApplication
 
-from .constants import Names, NewLayerFields
+from .constants import Names, NewPointLayerFields
 
 LOG_TAG: str = "Plugin: DHN"
 LEVEL_ICON: dict[Qgis.MessageLevel, str] = {
@@ -173,7 +173,7 @@ def create_summary_message(
     excel_summary: str = QCoreApplication.translate("summary", "(Summary saved to folder '{0}')").format(Names.excel_dir)  
     # fmt: on
 
-    if new_layer.fields().indexFromName(NewLayerFields.type.name) == -1:
+    if new_layer.fields().indexFromName(NewPointLayerFields.type.field_name) == -1:
         log_debug("Type field not found in new layer.", Qgis.Warning)
         # fmt: off
         fail_field: str = QCoreApplication.translate("summary", "Type field not found in new layer.") 
@@ -184,7 +184,7 @@ def create_summary_message(
     else:
         type_counts: dict[str, int] = {}
         for feature in new_layer.getFeatures():  # pyright: ignore[reportGeneralTypeIssues]
-            type_value = feature.attribute(NewLayerFields.type.name)
+            type_value = feature.attribute(NewPointLayerFields.type.field_name)
             if isinstance(type_value, str) and type_value:
                 type_counts[type_value] = type_counts.get(type_value, 0) + 1
 

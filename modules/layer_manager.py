@@ -8,7 +8,6 @@ import re
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-from qgis._core import QgsGeometry
 from qgis.core import (
     Qgis,
     QgsCoordinateReferenceSystem,
@@ -17,6 +16,7 @@ from qgis.core import (
     QgsFeature,
     QgsField,
     QgsFields,
+    QgsGeometry,
     QgsLayerTree,
     QgsLayerTreeNode,
     QgsProject,
@@ -33,16 +33,19 @@ from .constants import (
     PROBLEMATIC_FIELD_TYPES,
     Colours,
     Names,
-    NewLayerFields,
+    NewLineLayerFields,
+    NewPointLayerFields,
+    PipeType,
     QMT_Int,
 )
 from .context import PluginContext
 from .logs_and_errors import log_debug, raise_runtime_error, raise_user_error
+from .vector_analysis_tools import FieldNames, VectorAnalysisTools
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from qgis.core import QgsGeometry, QgsMapLayer
+    from qgis.core import QgsMapLayer
     from qgis.gui import QgsLayerTreeView
 
 
@@ -59,7 +62,8 @@ class LayerManager:
         self.project: QgsProject = project
         self.iface: QgisInterface = iface
         self._selected_layer: QgsVectorLayer | None = None
-        self._new_layer: QgsVectorLayer | None = None
+        self._new_point_layer: QgsVectorLayer | None = None
+        self._new_line_layer: QgsVectorLayer | None = None
 
     @property
     def selected_layer(self) -> QgsVectorLayer:
@@ -79,21 +83,38 @@ class LayerManager:
         self._selected_layer = self.get_selected_layer()
 
     @property
-    def new_layer(self) -> QgsVectorLayer:
+    def new_point_layer(self) -> QgsVectorLayer:
         """The new layer created by the plugin."""
-        if self._new_layer is None:
+        if self._new_point_layer is None:
             self.initialize_new_layer()
-        if self._new_layer is None:
+        if self._new_point_layer is None:
             raise_runtime_error("New layer is not set.")
-        return self._new_layer
+        return self._new_point_layer
 
-    @new_layer.setter
-    def new_layer(self, layer: QgsVectorLayer) -> None:
-        self._new_layer = layer
+    @new_point_layer.setter
+    def new_point_layer(self, layer: QgsVectorLayer) -> None:
+        self._new_point_layer = layer
 
     def initialize_new_layer(self) -> None:
         """Initialize the new layer."""
-        self.new_layer = self.create_new_layer()
+        self.new_point_layer = self.create_point_layer()
+
+    @property
+    def new_line_layer(self) -> QgsVectorLayer:
+        """The new pipe layer created by the plugin."""
+        if self._new_line_layer is None:
+            self.initialize_new_pipe_layer()
+        if self._new_line_layer is None:
+            raise_runtime_error("New pipe layer is not set.")
+        return self._new_line_layer
+
+    @new_line_layer.setter
+    def new_line_layer(self, layer: QgsVectorLayer) -> None:
+        self._new_line_layer = layer
+
+    def initialize_new_pipe_layer(self) -> None:
+        """Initialize the new pipe layer."""
+        self.new_line_layer = self.create_line_layer()
 
     def fix_layer_name(self, name: str) -> str:
         """Fix encoding mojibake and sanitize a string to be a valid layer name.
@@ -201,7 +222,9 @@ class LayerManager:
 
             for field in target_fields:
                 if source_feature.fieldNameIndex(field.name()) != -1:
-                    new_feature.setAttribute(field.name(), source_feature[field.name()])
+                    new_feature.setAttribute(
+                        field.name(), source_feature.attribute(field.name())
+                    )
 
             geom: QgsGeometry = source_feature.geometry()
             if geom.transform(transform) != 0:
@@ -363,35 +386,19 @@ class LayerManager:
             raise_user_error(QCoreApplication.translate("UserError", "The selected layer is not a line layer."))  # noqa: E501
             # fmt: on
 
-        # Check for one of the required 'diameter' fields
-        if all(
-            selected_layer.fields().lookupField(name) == -1
-            for name in Names.sel_layer_field_dim
-        ):
-            log_debug(
-                f"None of the specified dimension fields "
-                f"({', '.join(Names.sel_layer_field_dim)}) "
-                f"were found in the selected layer. Dimension-related "
-                f"attributes will be skipped.",
-                Qgis.Warning,
-            )
-
         # Reproject the layer to the project's CRS
         return self.reproject_layer_to_project_crs(selected_layer)
 
-    def create_new_layer(self) -> QgsVectorLayer:
+    def create_point_layer(self) -> QgsVectorLayer:
         """Create an empty point layer in the project's GeoPackage.
 
         Returns:
             The newly created QgsVectorLayer.
         """
-
         log_debug("Creating new layer in GeoPackage...")
 
         gpkg_path: Path = PluginContext.project_gpkg()
-        new_layer_name: str = (
-            f"{self.fix_layer_name(self.selected_layer.name())}{Names.new_layer_suffix}"
-        )
+        new_layer_name: str = f"{self.fix_layer_name(self.selected_layer.name())}{Names.new_fittings_layer_suffix}"
 
         if existing_layers := self.project.mapLayersByName(new_layer_name):
             self.project.removeMapLayers([layer.id() for layer in existing_layers])
@@ -407,32 +414,17 @@ class LayerManager:
             )
 
         fields_to_add: list[QgsField] = [
-            QgsField(field_enum.name, field_enum.data_type)
-            for field_enum in NewLayerFields
+            QgsField(field_enum.field_name, field_enum.data_type)
+            for field_enum in NewPointLayerFields
         ]
         data_provider.addAttributes(fields_to_add)
         empty_layer.updateFields()
 
-        options = QgsVectorFileWriter.SaveVectorOptions()
-        options.driverName = "GPKG"
-        options.layerName = new_layer_name
-        options.actionOnExistingFile = QgsVectorFileWriter.CreateOrOverwriteLayer
-
-        error: tuple = QgsVectorFileWriter.writeAsVectorFormatV3(
-            empty_layer, str(gpkg_path), self.project.transformContext(), options
+        self._write_layer_to_gpkg(empty_layer, gpkg_path, new_layer_name)
+        log_debug(
+            f"Empty layer '{new_layer_name}' created in GeoPackage.",
+            Qgis.Success,
         )
-        if error[0] == QgsVectorFileWriter.WriterError.NoError:
-            log_debug(
-                f"Empty layer '{new_layer_name}' "
-                f"with {len(empty_layer.fields())} fields and "
-                f"{empty_layer.featureCount()} features created "
-                f"in GeoPackage.",
-                Qgis.Success,
-            )
-        else:
-            raise_runtime_error(
-                f"Failed to create empty layer '{new_layer_name}' - Error: {error[1]}"
-            )
 
         root: QgsLayerTree | None = self.project.layerTreeRoot()
         if not root:
@@ -453,15 +445,147 @@ class LayerManager:
         root.insertLayer(0, gpkg_layer)
 
         log_debug(
-            f"Added empty layer '{gpkg_layer.name()}' "
-            f"with {len(gpkg_layer.fields())} fields and "
-            f"{gpkg_layer.featureCount()} features created "
-            "from the project's GeoPackage to the project.",
+            f"Added layer '{gpkg_layer.name()}' from GeoPackage to the project.",
             Qgis.Success,
         )
-        self.set_layer_style(gpkg_layer)
+        self.set_point_layer_style(gpkg_layer)
 
         return gpkg_layer
+
+    def create_line_layer(self) -> QgsVectorLayer:
+        """Create a copy of the selected layer to store pipe properties.
+
+        This creates a new line layer in the project's GeoPackage. The new layer
+        contains all geometries from the selected layer but has a cleaned-up
+        attribute table defined by the `NewLineLayerFields` enum.
+
+        Returns:
+             The newly created QgsVectorLayer.
+        """
+        log_debug("Creating clean pipe layer copy in GeoPackage...")
+        gpkg_path: Path = PluginContext.project_gpkg()
+        base_name: str = self.fix_layer_name(self.selected_layer.name())
+        new_layer_name: str = f"{base_name}{Names.new_pipe_layer_suffix}"
+
+        if existing_layers := self.project.mapLayersByName(new_layer_name):
+            self.project.removeMapLayers([layer.id() for layer in existing_layers])
+
+        # 1. Create a temporary in-memory layer with the desired structure
+        temp_pipe_layer = QgsVectorLayer(
+            f"LineString?crs={self.project.crs().authid()}",
+            "temp_pipe_layer",
+            "memory",
+        )
+        data_provider: QgsVectorDataProvider | None = temp_pipe_layer.dataProvider()
+        if data_provider is None:
+            raise_runtime_error("Could not create data provider for temp pipe layer.")
+
+        fields_to_add: list[QgsField] = [
+            QgsField(field_enum.field_name, field_enum.data_type)
+            for field_enum in NewLineLayerFields
+        ]
+        data_provider.addAttributes(fields_to_add)
+        temp_pipe_layer.updateFields()
+
+        # 2. Find source field names for dimensions and load
+        found_fields: FieldNames = VectorAnalysisTools.find_layer_fields(
+            self.selected_layer
+        )
+        dim_field_name: str | None = found_fields.dim
+        load_field_name: str | None = found_fields.load
+
+        # 3. Populate the temporary layer with features and mapped attributes
+        new_features: list[QgsFeature] = []
+        for source_feature in self.selected_layer.getFeatures():
+            new_feature = QgsFeature(temp_pipe_layer.fields())
+            new_feature.setGeometry(source_feature.geometry())
+
+            new_feature.setAttribute(
+                NewLineLayerFields.org_id.field_name,
+                source_feature.attribute("original_fid"),
+            )
+            if dim_field_name:
+                new_feature.setAttribute(
+                    NewLineLayerFields.dim.field_name,
+                    source_feature.attribute(dim_field_name),
+                )
+            if load_field_name:
+                new_feature.setAttribute(
+                    NewLineLayerFields.load.field_name,
+                    source_feature.attribute(load_field_name),
+                )
+
+            new_feature.setAttribute(
+                NewLineLayerFields.length.field_name, source_feature.geometry().length()
+            )
+
+            new_feature.setAttribute(
+                NewLineLayerFields.type.field_name, PipeType.MAIN.translated
+            )
+            new_features.append(new_feature)
+
+        temp_pipe_layer.startEditing()
+        temp_pipe_layer.addFeatures(new_features)
+        temp_pipe_layer.commitChanges()
+
+        # 4. Write the temporary layer to the GeoPackage
+        self._write_layer_to_gpkg(temp_pipe_layer, gpkg_path, new_layer_name)
+
+        # 5. Load the new layer from the GeoPackage and add to project
+        uri: str = f"{gpkg_path!s}|layername={new_layer_name}"
+        gpkg_layer = QgsVectorLayer(uri, new_layer_name, "ogr")
+
+        if not gpkg_layer.isValid():
+            raise_runtime_error(
+                f"Could not find layer '{new_layer_name}' in GeoPackage '{gpkg_path}'"
+            )
+
+        if root := self.project.layerTreeRoot():
+            self.project.addMapLayer(gpkg_layer, addToLegend=False)
+            root.insertLayer(1, gpkg_layer)
+
+        log_debug(
+            f"Created pipe layer copy '{gpkg_layer.name()}' in GeoPackage.",
+            Qgis.Success,
+        )
+
+        return gpkg_layer
+
+    def _write_layer_to_gpkg(
+        self,
+        layer_to_write: QgsVectorLayer,
+        gpkg_path: "Path",
+        layer_name: str,
+    ) -> None:
+        """Write a vector layer to a GeoPackage file.
+
+        Args:
+            layer_to_write: The layer to write.
+            gpkg_path: The path to the output GeoPackage file.
+            layer_name: The name of the layer within the GeoPackage.
+
+        Raises:
+            CustomRuntimeError: If writing the layer fails.
+        """
+        options = QgsVectorFileWriter.SaveVectorOptions()
+        options.driverName = "GPKG"
+        options.layerName = layer_name
+        if gpkg_path.exists():
+            options.actionOnExistingFile = QgsVectorFileWriter.CreateOrOverwriteLayer
+        else:
+            options.actionOnExistingFile = QgsVectorFileWriter.CreateOrOverwriteFile
+
+        error: tuple = QgsVectorFileWriter.writeAsVectorFormatV3(
+            layer_to_write,
+            str(gpkg_path),
+            self.project.transformContext(),
+            options,
+        )
+        if error[0] != QgsVectorFileWriter.WriterError.NoError:
+            raise_runtime_error(
+                f"Failed to create layer '{layer_name}' in '{gpkg_path}'. "
+                f"Error: {error[1]}"
+            )
 
     def create_temporary_point_layer(self) -> QgsVectorLayer:
         """Create a temporary in-memory point layer with the standard result fields.
@@ -480,8 +604,8 @@ class LayerManager:
 
         fields_to_add: list[QgsField] = []
         fields_to_add.extend(
-            QgsField(field_enum.name, field_enum.data_type)
-            for field_enum in NewLayerFields
+            QgsField(field_enum.field_name, field_enum.data_type)
+            for field_enum in NewPointLayerFields
         )
         data_provider.addAttributes(fields_to_add)
 
@@ -512,17 +636,16 @@ class LayerManager:
             CustomUserError: If the source layer cannot be found.
         """
         source_layer_name: str = result_layer.name().removesuffix(
-            Names.new_layer_suffix
+            Names.new_fittings_layer_suffix
         )
         source_layers: list[QgsMapLayer] = self.project.mapLayersByName(
             source_layer_name
         )
 
         if not source_layers:
-            # fmt: off
-            msg: str = QCoreApplication.translate("UserError", "Could not find the original source layer '{0}' for the export.").format(source_layer_name)  # noqa: E501
-            # fmt: on
-            raise_user_error(msg)
+            raise_runtime_error(
+                "Could not find the original source layer for the export."
+            )
 
         # Assume the first found layer is the correct one
         source_layer: QgsVectorLayer = source_layers[0]
@@ -583,7 +706,7 @@ class LayerManager:
             f"{target_layer.featureCount()} features."
         )
 
-    def set_layer_style(self, layer: QgsVectorLayer) -> None:
+    def set_point_layer_style(self, layer: QgsVectorLayer) -> None:
         """Set the layer style from a QML file.
 
         Args:

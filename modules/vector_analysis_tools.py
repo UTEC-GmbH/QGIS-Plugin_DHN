@@ -3,7 +3,7 @@
 This module contains the VectorAnalysisTools class.
 """
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 from qgis.core import (
     Qgis,
@@ -18,13 +18,18 @@ from qgis.core import (
     QgsWkbTypes,
 )
 
-from .constants import Names, NewLayerFields, Numbers
+from .constants import Names, NewPointLayerFields, Numbers
 from .logs_and_errors import log_debug
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
-
     from qgis.core import QgsRectangle
+
+
+class FieldNames(NamedTuple):
+    """Holds the names of special fields found in the layer."""
+
+    dim: str | None
+    load: str | None
 
 
 class VectorAnalysisTools:
@@ -49,30 +54,41 @@ class VectorAnalysisTools:
             selected_layer.getFeatures(request)
         )
         log_debug("Spatial index created.", Qgis.Success)
-        self.dim_field_name: str | None = self.find_dim_field_name(selected_layer)
+
+        fields: FieldNames = self.find_layer_fields(selected_layer)
+        self.dim_field_name: str | None = fields.dim
+        self.load_field_name: str | None = fields.load
 
     @staticmethod
-    def find_dim_field_name(layer: QgsVectorLayer) -> str | None:
-        """Find the first matching dimension field name from the constants.
+    def find_layer_fields(layer: QgsVectorLayer) -> FieldNames:
+        """Find matching dimension and load field names from the constants.
 
         Args:
-            layer: The layer to search for the dimension field.
+            layer: The layer to search for the fields.
 
         Returns:
-            The name of the found field, or None if no match is found.
+            A NamedTuple containing the found field names.
         """
         layer_fields: QgsFields = layer.fields()
-        field_names: Iterable[str] = Names.sel_layer_field_dim
-        found_name: str | None = next(
-            (name for name in field_names if layer_fields.lookupField(name) != -1),
-            None,
-        )
 
-        if found_name:
-            log_debug(f"Found dimension field: '{found_name}'", Qgis.Success)
+        def _find(candidates: tuple[str, ...]) -> str | None:
+            return next(
+                (name for name in candidates if layer_fields.lookupField(name) != -1),
+                None,
+            )
+
+        dim_name: str | None = _find(Names.sel_layer_field_dim)
+        load_name: str | None = _find(Names.sel_layer_field_load)
+
+        if dim_name:
+            log_debug(f"Found dimension field: '{dim_name}'", Qgis.Success)
         else:
             log_debug("No dimension field found in the selected layer.", Qgis.Warning)
-        return found_name
+
+        if load_name:
+            log_debug(f"Found load field: '{load_name}'", Qgis.Success)
+
+        return FieldNames(dim_name, load_name)
 
     def create_feature(self, geometry: QgsGeometry, attributes: dict) -> bool:
         """Create a new feature in the new layer.
@@ -114,17 +130,19 @@ class VectorAnalysisTools:
         Returns:
             A dictionary of attributes derived from the connected features.
         """
+        attributes: dict = {}
+
+        # Get connected feature IDs (line objects)
         connected_ids: list[int] = sorted(
             {feature.attribute("original_fid") for feature in connected_features}
         )
-        attributes: dict = {
-            NewLayerFields.connected.name: Names.line_separator.join(
-                str(id_int) or "???" for id_int in connected_ids
-            )
-        }
+        attributes[NewPointLayerFields.connected.field_name] = (
+            Names.line_separator.join(str(id_int) or "???" for id_int in connected_ids)
+        )
+
         # Get dimension values if the dimension field was found
-        if self.dim_field_name:
-            dims: list[int] = sorted(
+        if self.dim_field_name and (
+            dims := sorted(
                 {
                     int(feat[self.dim_field_name])
                     for feat in connected_features
@@ -132,9 +150,10 @@ class VectorAnalysisTools:
                 },
                 reverse=True,
             )
-            attributes[NewLayerFields.dim_1.name] = dims[0]
+        ):
+            attributes[NewPointLayerFields.dim_1.field_name] = dims[0]
             if len(dims) > 1:
-                attributes[NewLayerFields.dim_2.name] = dims[-1]
+                attributes[NewPointLayerFields.dim_2.field_name] = dims[-1]
 
         return attributes
 
