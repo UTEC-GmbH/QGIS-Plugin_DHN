@@ -7,6 +7,7 @@ from collections.abc import Callable, Generator
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from qgis._core import QgsMapLayer
 from qgis.core import Qgis, QgsApplication, QgsLayerTreeNode, QgsProject, QgsVectorLayer
 from qgis.gui import QgisInterface, QgsLayerTreeView
 from qgis.PyQt.QtCore import QCoreApplication, QObject, QSettings, Qt, QTranslator
@@ -442,7 +443,9 @@ class DHN(QObject):
                 Names.new_fittings_layer_suffix
             )
             pipe_layer_name: str = f"{base_name}{Names.new_pipe_layer_suffix}"
-            pipe_layers = self.project.mapLayersByName(pipe_layer_name)
+            pipe_layers: list[QgsMapLayer] = self.project.mapLayersByName(
+                pipe_layer_name
+            )
 
             if not pipe_layers:
                 raise_runtime_error(
