@@ -9,7 +9,7 @@ changelog=
 
 
     
-description=Dimensionierung von Ferwärmenetzen. 
+description=Netzanalyse inkl. Massenermittlung 
 qgisMinimumVersion=3.40
 author=Florian Ludwig
 email=devalue-scope-drum@duck.com

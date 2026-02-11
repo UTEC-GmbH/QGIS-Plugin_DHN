@@ -13,7 +13,7 @@ from qgis.core import (
     QgsVectorLayer,
 )
 
-from .constants import NewLayerFields
+from .constants import NewPointLayerFields
 from .logs_and_errors import log_debug, raise_runtime_error
 
 
@@ -98,10 +98,10 @@ class DuplicateFilter:
         return (
             round(feature_geometry.asPoint().x(), 4),
             round(feature_geometry.asPoint().y(), 4),
-            feature.attribute(NewLayerFields.type.name),
-            feature.attribute(NewLayerFields.dim_1.name) or "",
-            feature.attribute(NewLayerFields.angle.name) or None,
-            feature.attribute(NewLayerFields.connected.name) or "",
+            feature.attribute(NewPointLayerFields.type.field_name),
+            feature.attribute(NewPointLayerFields.dim_1.field_name) or "",
+            feature.attribute(NewPointLayerFields.angle.field_name) or None,
+            feature.attribute(NewPointLayerFields.connected.field_name) or "",
         )
 
     def _delete_features_from_layer(

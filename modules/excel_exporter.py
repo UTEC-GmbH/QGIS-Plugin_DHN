@@ -9,15 +9,12 @@ from pathlib import Path
 from qgis.core import (
     Qgis,
     QgsCoordinateTransformContext,
-    QgsFeature,
-    QgsField,
-    QgsVectorDataProvider,
     QgsVectorFileWriter,
     QgsVectorLayer,
 )
 from qgis.PyQt.QtCore import QCoreApplication
 
-from .constants import Names, QMT_Double, QMT_Int
+from .constants import Names
 from .context import PluginContext
 from .logs_and_errors import log_debug, raise_runtime_error
 
@@ -39,7 +36,9 @@ class ExcelExporter:
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # --- Prepare plugin output file ---
-        layer_name: str = fittings_layer.name().removesuffix(Names.new_layer_suffix)
+        layer_name: str = fittings_layer.name().removesuffix(
+            Names.new_fittings_layer_suffix
+        )
         output_file_name: str = f"{Names.excel_file_output} - {layer_name}.xlsx"
         output_path: Path = output_dir / output_file_name
 
@@ -48,18 +47,8 @@ class ExcelExporter:
         self._write_to_plugin_output_file(fittings_layer, output_path, sheet_name)
 
         # --- Export line features (pipe runs) to plugin output file ---
-        temporary_table: QgsVectorLayer | None = self._create_line_table(pipe_layer)
-        if not temporary_table:
-            return
-        try:
-            sheet_name: str = QCoreApplication.translate("XlsxExport", "Pipe Runs")
-            self._write_to_plugin_output_file(temporary_table, output_path, sheet_name)
-        finally:
-            # Ensure the temporary table is removed from the project registry
-            # Note: Since we created it in memory and didn't add it to the project
-            # explicitly in this class, we just let it go out of scope, but if it
-            # was added to the project, we should remove it.
-            pass
+        sheet_name: str = QCoreApplication.translate("XlsxExport", "Pipe Runs")
+        self._write_to_plugin_output_file(pipe_layer, output_path, sheet_name)
 
         # --- Copy summary template file ---
         try:
@@ -74,90 +63,22 @@ class ExcelExporter:
             layer_name: The name of the layer being exported.
             output_dir: The directory where the output file should be created.
         """
-        template_name: str = f"{Names.excel_file_summary}.xlsx"
+        template_name: str = Names.excel_file_template
         template_path = Path(template_name)
         dest_file_name: str = (
-            f"{template_path.stem} - {layer_name}{template_path.suffix}"
+            f"{Names.excel_file_summary} - {layer_name}{template_path.suffix}"
         )
 
         template_src: Path = PluginContext.templates_path() / template_name
-        template_dest: Path = output_dir / dest_file_name
+        dest_file: Path = output_dir / dest_file_name
 
         if not template_src.exists():
             raise_runtime_error(f"Template file not found at: {template_src}")
-        elif not template_dest.exists():
-            shutil.copy(template_src, template_dest)
-            log_debug(f"Copied summary template to: {template_dest}")
+        elif not dest_file.exists():
+            shutil.copy(template_src, dest_file)
+            log_debug(f"Copied summary template to: {dest_file}")
         else:
-            log_debug(f"Summary template already exists at: {template_dest}")
-
-    def _create_line_table(self, source_layer: QgsVectorLayer) -> QgsVectorLayer | None:
-        """Create and populate a temporary table with line feature data.
-
-        Args:
-            source_layer: The source layer containing line features.
-
-        Returns:
-            A temporary QgsVectorLayer with line data, or None if no features found.
-        """
-
-        log_debug("Creating temporary (in-memory) layer for line features...")
-
-        temporary_table = QgsVectorLayer("None?crs=", "line_features_data", "memory")
-        line_data_provider: QgsVectorDataProvider | None = (
-            temporary_table.dataProvider()
-        )
-        if not line_data_provider:
-            raise_runtime_error(
-                "Could not create data provider for line features layer."
-            )
-
-        line_fields: list[QgsField] = [
-            QgsField("ID", QMT_Int),
-            QgsField(Names.excel_dim, QMT_Int),
-            QgsField(Names.excel_line_length, QMT_Double),
-        ]
-        line_data_provider.addAttributes(line_fields)
-        temporary_table.updateFields()
-
-        dim_field_name: str | None = next(
-            (
-                name
-                for name in Names.sel_layer_field_dim
-                if source_layer.fields().lookupField(name) != -1
-            ),
-            None,
-        )
-
-        features_for_excel: list[QgsFeature] = []
-        for original_feature in source_layer.getFeatures():
-            new_excel_feature = QgsFeature(temporary_table.fields())
-            new_excel_feature.setAttribute(
-                "ID", original_feature.attribute("original_fid")
-            )
-            geom = original_feature.geometry()
-            length: float = geom.length() if geom and not geom.isEmpty() else 0.0
-            new_excel_feature.setAttribute(Names.excel_line_length, length)
-
-            dim_value = (
-                original_feature.attribute(dim_field_name) if dim_field_name else None
-            )
-            new_excel_feature.setAttribute(
-                Names.excel_dim, dim_value if isinstance(dim_value, int) else None
-            )
-            features_for_excel.append(new_excel_feature)
-
-        if not features_for_excel:
-            log_debug("No line features to export to Excel.", Qgis.Warning)
-            return None
-
-        temporary_table.startEditing()
-        temporary_table.addFeatures(features_for_excel)
-        if not temporary_table.commitChanges():
-            raise_runtime_error("Failed to commit line features to temporary layer.")
-
-        log_debug(f"Prepared {len(features_for_excel)} line features for Excel export.")
-        return temporary_table
+            log_debug(f"Summary template already exists at: {dest_file}")
 
     def _write_to_plugin_output_file(
         self, layer: QgsVectorLayer, output_path: Path, sheet_name: str
@@ -167,7 +88,6 @@ class ExcelExporter:
         Args:
             layer: The layer to write.
             output_path: The path to the output file.
-            options: The writer options.
             sheet_name: The name of the sheet in the Excel file.
         """
 
