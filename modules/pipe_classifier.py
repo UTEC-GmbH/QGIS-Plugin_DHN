@@ -19,6 +19,7 @@ from qgis.core import (
 
 from .constants import (
     FittingType,
+    Names,
     NewLineLayerFields,
     NewPointLayerFields,
     Numbers,
@@ -100,6 +101,8 @@ class PipeClassifier:
             log_debug(f"Marked {len(pipes_to_mark)} pipes as house connections.")
         else:
             log_debug("Failed to commit changes to pipe layer.", Qgis.Critical)
+
+        self._populate_connected_buildings()
 
     def _trace_from_house(self, hc_feat: QgsFeature) -> set[int]:
         """Trace the path from a house connection to the nearest T-piece."""
@@ -226,3 +229,81 @@ class PipeClassifier:
                     if feat.geometry().intersects(search_geom):
                         return True
         return False
+
+    def _populate_connected_buildings(self) -> None:
+        """Identify and list connected buildings for each pipe.
+
+        This method builds a graph of the network and propagates house connection
+        IDs from the leaves (house connections) up through the network branches.
+        """
+        log_debug("Populating connected buildings...")
+
+        # 1. Build Graph: Node -> Set of (PipeID, NeighborNode)
+        # Node is a tuple of (x, y) rounded to 4 decimals.
+        adj: dict[tuple[float, float], set[tuple[int, tuple[float, float]]]] = {}
+        degrees: dict[tuple[float, float], int] = {}
+
+        for feature in self.pipe_layer.getFeatures():
+            endpoints = self._get_endpoints(feature)
+            if len(endpoints) != 2:  # noqa: PLR2004
+                continue
+
+            p1 = (round(endpoints[0].x(), 4), round(endpoints[0].y(), 4))
+            p2 = (round(endpoints[1].x(), 4), round(endpoints[1].y(), 4))
+            fid = feature.id()
+
+            adj.setdefault(p1, set()).add((fid, p2))
+            adj.setdefault(p2, set()).add((fid, p1))
+
+            degrees[p1] = degrees.get(p1, 0) + 1
+            degrees[p2] = degrees.get(p2, 0) + 1
+
+        # 2. Map House Connections to Graph Nodes
+        node_hcs: dict[tuple[float, float], set[str]] = {}
+        req = QgsFeatureRequest().setFilterExpression(
+            f'"{NewPointLayerFields.type.field_name}" = '
+            f"'{FittingType.HOUSE_CONN.translated}'"
+        )
+        for feat in self.point_layer.getFeatures(req):
+            if geom := feat.geometry():
+                p = geom.asPoint()
+                key = (round(p.x(), 4), round(p.y(), 4))
+                node_hcs.setdefault(key, set()).add(str(feat.id()))
+
+        # 3. Peeling Algorithm (Propagate from leaves)
+        pipe_hcs: dict[int, set[str]] = {}
+        leaves = [n for n, d in degrees.items() if d == 1]
+
+        while leaves:
+            leaf = leaves.pop(0)
+            if degrees[leaf] == 0:
+                continue
+
+            # Get the single connected edge
+            edge_info = next(iter(adj[leaf]))
+            fid, neighbor = edge_info
+
+            if hcs := node_hcs.get(leaf, set()):
+                pipe_hcs.setdefault(fid, set()).update(hcs)
+                node_hcs.setdefault(neighbor, set()).update(hcs)
+
+            # Remove edge from graph
+            adj[leaf].remove(edge_info)
+            adj[neighbor].remove((fid, leaf))
+            degrees[leaf] -= 1
+            degrees[neighbor] -= 1
+
+            # If neighbor becomes a leaf, add to queue
+            if degrees[neighbor] == 1:
+                leaves.append(neighbor)
+
+        # 4. Write results to layer
+        self.pipe_layer.startEditing()
+        idx = self.pipe_layer.fields().lookupField(
+            NewLineLayerFields.conn_buildings.field_name
+        )
+        if idx != -1:
+            for fid, hcs in pipe_hcs.items():
+                val = Names.separator.join(sorted(hcs, key=int))
+                self.pipe_layer.changeAttributeValue(fid, idx, val)
+        self.pipe_layer.commitChanges()

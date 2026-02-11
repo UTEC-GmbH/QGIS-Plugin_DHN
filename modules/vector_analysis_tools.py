@@ -136,8 +136,8 @@ class VectorAnalysisTools:
         connected_ids: list[int] = sorted(
             {feature.attribute("original_fid") for feature in connected_features}
         )
-        attributes[NewPointLayerFields.connected.field_name] = (
-            Names.line_separator.join(str(id_int) or "???" for id_int in connected_ids)
+        attributes[NewPointLayerFields.connected.field_name] = Names.separator.join(
+            str(id_int) or "???" for id_int in connected_ids
         )
 
         # Get dimension values if the dimension field was found
