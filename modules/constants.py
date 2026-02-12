@@ -237,7 +237,7 @@ class Names:
     """
 
     dim_prefix: str = "DN"
-    line_separator: str = " / "
+    separator: str = " / "
 
     excel_dir: str = "UTEC"
     excel_file_output: str = "plugin_output"
@@ -385,6 +385,14 @@ class NewLineLayerFields(Enum):
     )
     designation: tuple[str, Qmt] = (
         QT_TRANSLATE_NOOP("cont_LineLayerFields", "Designation"),
+        QMT_String,
+    )
+    conn_buildings: tuple[str, Qmt] = (
+        QT_TRANSLATE_NOOP("cont_LineLayerFields", "Connected Buildings"),
+        QMT_String,
+    )
+    notes: tuple[str, Qmt] = (
+        QT_TRANSLATE_NOOP("cont_LineLayerFields", "Notes"),
         QMT_String,
     )
 
