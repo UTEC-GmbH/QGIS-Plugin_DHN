@@ -173,6 +173,7 @@ class PipeType(Enum):
 
     MAIN: str = QT_TRANSLATE_NOOP("cont_PipeType", "Main Pipe")
     CONN: str = QT_TRANSLATE_NOOP("cont_PipeType", "Connecting Pipe")
+    FORK: str = QT_TRANSLATE_NOOP("cont_PipeType", "Main Pipe (Fork)")
 
     @property
     def translated(self) -> str:
@@ -316,6 +317,10 @@ class NewPointLayerFields(Enum):
         QT_TRANSLATE_NOOP("cont_PointLayerFields", "Type"),
         QMT_String,
     )
+    designation: tuple[str, Qmt] = (
+        QT_TRANSLATE_NOOP("cont_PointLayerFields", "Designation"),
+        QMT_String,
+    )
     dim_1: tuple[str, Qmt] = (
         QT_TRANSLATE_NOOP("cont_PointLayerFields", "Diameter 1"),
         QMT_Int,
@@ -381,6 +386,10 @@ class NewLineLayerFields(Enum):
     )
     type: tuple[str, Qmt] = (
         QT_TRANSLATE_NOOP("cont_LineLayerFields", "Type"),
+        QMT_String,
+    )
+    branch: tuple[str, Qmt] = (
+        QT_TRANSLATE_NOOP("cont_LineLayerFields", "Branch"),
         QMT_String,
     )
     designation: tuple[str, Qmt] = (
