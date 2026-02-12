@@ -4,12 +4,12 @@
 <context>
     <name>Menu_Button</name>
     <message>
-        <location filename="../UTEC_DHN.py" line="157"/>
+        <location filename="../UTEC_DHN.py" line="158"/>
         <source>Run Analysis</source>
         <translation>Analyse Starten</translation>
     </message>
     <message>
-        <location filename="../UTEC_DHN.py" line="174"/>
+        <location filename="../UTEC_DHN.py" line="175"/>
         <source>Re-do the Excel output</source>
         <translation>Excel-Zusammenfassung aktualisieren</translation>
     </message>
@@ -17,12 +17,12 @@
 <context>
     <name>Menu_ToolTip</name>
     <message>
-        <location filename="../UTEC_DHN.py" line="158"/>
+        <location filename="../UTEC_DHN.py" line="159"/>
         <source>&lt;p&gt;&lt;b&gt;Material Take-off and network analysis for the selected layer&lt;/b&gt;&lt;/p&gt;&lt;p&gt;&lt;span style=&apos;font-weight:normal; font-style:normal;&apos;&gt;The selected layer needs to be a line layer.&lt;/span&gt;&lt;/p&gt;</source>
         <translation>&lt;p&gt;&lt;b&gt;Massenermittlung und Netzwerkanalyse für den gewälten Layer&lt;/b&gt;&lt;/p&gt;&lt;p&gt;&lt;span style=&apos;font-weight:normal; font-style:normal;&apos;&gt;Der Gewählte Layer muss ein Linienlayer sein.&lt;/span&gt;&lt;/p&gt;</translation>
     </message>
     <message>
-        <location filename="../UTEC_DHN.py" line="175"/>
+        <location filename="../UTEC_DHN.py" line="176"/>
         <source>&lt;p&gt;&lt;b&gt;Re-do the Excel output&lt;/b&gt;&lt;/p&gt;&lt;p&gt;&lt;span style=&apos;font-weight:normal; font-style:normal;&apos;&gt;After manual changes to the new layers, the Excel output needs to be updated. Select the result layers and click this button. The Excel output will be updated.&lt;/span&gt;&lt;/p&gt;</source>
         <translation>&lt;p&gt;&lt;b&gt;Excel-Ausgabe aktualisieren&lt;/b&gt;&lt;/p&gt;&lt;p&gt;&lt;span style=&apos;font-weight:normal; font-style:normal;&apos;&gt;Nach manuellen Änderungen an den Ergebnislayern muss die Excel-Ausgabe aktualisiert werden. Wähle die Ergebnislayer aus und drücke diesen Knopf um die Ausgabe zu aktualisieren.&lt;/span&gt;&lt;/p&gt;</translation>
     </message>
@@ -30,12 +30,12 @@
 <context>
     <name>UserError</name>
     <message>
-        <location filename="../UTEC_DHN.py" line="427"/>
+        <location filename="../UTEC_DHN.py" line="428"/>
         <source>Please select a single result layer to export.</source>
         <translation>Bitte einen einzelnen Ergebnislayer auswählen.</translation>
     </message>
     <message>
-        <location filename="../UTEC_DHN.py" line="436"/>
+        <location filename="../UTEC_DHN.py" line="437"/>
         <source>The selected layer is not a valid result layer from this plugin.</source>
         <translation>Der gewählte Layer ist kein gültiger Ergebnislayer der Massenermittlung.</translation>
     </message>
@@ -147,6 +147,16 @@
         <location filename="../modules/constants.py" line="387"/>
         <source>Designation</source>
         <translation>Bezeichnung</translation>
+    </message>
+    <message>
+        <location filename="../modules/constants.py" line="391"/>
+        <source>Connected Buildings</source>
+        <translation>Abnehmer an Teilstrecke</translation>
+    </message>
+    <message>
+        <location filename="../modules/constants.py" line="395"/>
+        <source>Notes</source>
+        <translation>Anmerkungen</translation>
     </message>
 </context>
 <context>
@@ -282,12 +292,12 @@
 <context>
     <name>progress_bar</name>
     <message>
-        <location filename="../UTEC_DHN.py" line="298"/>
+        <location filename="../UTEC_DHN.py" line="299"/>
         <source>Performing bulk assessment...</source>
         <translation>Verarbeite Leitungsnetz...</translation>
     </message>
     <message>
-        <location filename="../UTEC_DHN.py" line="333"/>
+        <location filename="../UTEC_DHN.py" line="334"/>
         <source>Classifying pipes...</source>
         <translation>Untersuche Rohrleitungen...</translation>
     </message>
@@ -310,7 +320,7 @@
 <context>
     <name>summary</name>
     <message>
-        <location filename="../UTEC_DHN.py" line="458"/>
+        <location filename="../UTEC_DHN.py" line="461"/>
         <source>Excel export has been updated.</source>
         <translation>Die Excel-Zusammenfassung wurde aktualisiert.</translation>
     </message>
