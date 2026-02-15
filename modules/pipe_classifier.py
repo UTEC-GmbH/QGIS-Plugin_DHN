@@ -102,8 +102,13 @@ class PipeClassifier:
         else:
             log_debug("Failed to commit changes to pipe layer.", Qgis.Critical)
 
-        pipe_hcs = self._populate_connected_buildings()
-        self._generate_designations(pipe_hcs)
+        pipe_hcs: dict[int, set[str]] = self._populate_connected_buildings()
+
+        main_pipe_branches: dict[int, str] = self._assign_branches()
+        all_pipe_branches: dict[int, str] = self._propagate_branches_to_connections(
+            main_pipe_branches
+        )
+        self._generate_designations(pipe_hcs, all_pipe_branches)
 
     def _trace_from_house(self, hc_feat: QgsFeature) -> set[int]:
         """Trace the path from a house connection to the nearest T-piece."""
@@ -311,8 +316,171 @@ class PipeClassifier:
 
         return pipe_hcs
 
-    def _generate_designations(self, pipe_hcs: dict[int, set[str]]) -> None:
-        """Generate and assign designations, types, and branches to pipes."""
+    def _assign_branches(self) -> dict[int, str]:
+        """Identifies network branches for main pipes.
+
+        A branch is a sequence of main pipes between fork points (junctions with
+        3 or more main pipes) or endpoints.
+
+        Returns:
+            A dictionary mapping main pipe FIDs to their assigned branch number.
+        """
+        log_debug("Identifying network branches...")
+
+        # 1. Build graph of main pipes only
+        adj: dict[tuple[float, float], list[tuple[int, tuple[float, float]]]] = {}
+        main_pipe_fids: set[int] = set()
+        type_idx: int = self.pipe_layer.fields().lookupField(
+            NewLineLayerFields.type.field_name
+        )
+        main_type: str = PipeType.MAIN.translated
+
+        for feature in self.pipe_layer.getFeatures():
+            if feature.attribute(type_idx) == main_type:
+                fid: int = feature.id()
+                main_pipe_fids.add(fid)
+                endpoints: list[QgsPointXY] = self._get_endpoints(feature)
+                if len(endpoints) != 2:  # noqa: PLR2004
+                    continue
+
+                p1: tuple[float, float] = (
+                    round(endpoints[0].x(), 4),
+                    round(endpoints[0].y(), 4),
+                )
+                p2: tuple[float, float] = (
+                    round(endpoints[1].x(), 4),
+                    round(endpoints[1].y(), 4),
+                )
+
+                adj.setdefault(p1, []).append((fid, p2))
+                adj.setdefault(p2, []).append((fid, p1))
+
+        # 2. Identify fork nodes (degree >= 3)
+        fork_nodes: set[tuple[float, float]] = {
+            node for node, connections in adj.items() if len(connections) >= 3
+        }
+
+        # 3. Traverse and assign branches using BFS
+        pipe_branches: dict[int, str] = {}
+        visited_pipes: set[int] = set()
+        branch_counter: int = 1
+
+        for fid in main_pipe_fids:
+            if fid in visited_pipes:
+                continue
+
+            branch_id: str = f"{branch_counter:02d}"
+            branch_counter += 1
+
+            queue: list[int] = [fid]
+            visited_pipes.add(fid)
+
+            head: int = 0
+            while head < len(queue):
+                current_fid: int = queue[head]
+                head += 1
+
+                pipe_branches[current_fid] = branch_id
+
+                feature = self.pipe_layer.getFeature(current_fid)
+                endpoints = self._get_endpoints(feature)
+                if len(endpoints) != 2:  # noqa: PLR2004
+                    continue
+
+                for p in endpoints:
+                    node: tuple[float, float] = (round(p.x(), 4), round(p.y(), 4))
+                    if node in fork_nodes:
+                        continue  # Stop traversal at forks
+
+                    for neighbor_fid, _ in adj.get(node, []):
+                        if neighbor_fid not in visited_pipes:
+                            visited_pipes.add(neighbor_fid)
+                            queue.append(neighbor_fid)
+
+        log_debug(f"Identified {branch_counter - 1} main branches.")
+        return pipe_branches
+
+    def _propagate_branches_to_connections(
+        self, pipe_branches: dict[int, str]
+    ) -> dict[int, str]:
+        """Propagates branch numbers from main pipes to connected connection pipes."""
+        log_debug("Propagating branch numbers to connection pipes...")
+
+        all_branches = pipe_branches.copy()
+
+        # 1. Identify Connection Pipes and build connectivity map
+        conn_pipes: list[int] = []
+        node_pipes: dict[tuple[float, float], list[int]] = {}
+
+        type_idx: int = self.pipe_layer.fields().lookupField(
+            NewLineLayerFields.type.field_name
+        )
+        conn_type: str = PipeType.CONN.translated
+
+        for feature in self.pipe_layer.getFeatures():
+            fid = feature.id()
+            if feature.attribute(type_idx) == conn_type:
+                conn_pipes.append(fid)
+
+            endpoints = self._get_endpoints(feature)
+            for p in endpoints:
+                key = (round(p.x(), 4), round(p.y(), 4))
+                node_pipes.setdefault(key, []).append(fid)
+
+        # 2. Propagate branches iteratively
+        # We iterate until no more pipes can be assigned.
+        unassigned = set(conn_pipes)
+        # Safety: ensure we don't try to assign if already assigned
+        unassigned -= set(all_branches.keys())
+
+        changed = True
+        while changed:
+            changed = False
+            assigned_in_this_pass = {}
+
+            for fid in unassigned:
+                feature = self.pipe_layer.getFeature(fid)
+                endpoints = self._get_endpoints(feature)
+
+                found_branch = None
+                for p in endpoints:
+                    key = (round(p.x(), 4), round(p.y(), 4))
+                    neighbors = node_pipes.get(key, [])
+
+                    for n_fid in neighbors:
+                        if n_fid == fid:
+                            continue
+                        if n_fid in all_branches:
+                            found_branch = all_branches[n_fid]
+                            break
+                    if found_branch:
+                        break
+
+                if found_branch:
+                    assigned_in_this_pass[fid] = found_branch
+
+            if assigned_in_this_pass:
+                all_branches.update(assigned_in_this_pass)
+                unassigned -= set(assigned_in_this_pass.keys())
+                changed = True
+
+        log_debug(
+            f"Propagated branches to {len(conn_pipes) - len(unassigned)} "
+            f"connection pipes."
+        )
+        return all_branches
+
+    def _generate_designations(
+        self, pipe_hcs: dict[int, set[str]], pipe_branches: dict[int, str]
+    ) -> None:
+        """Generate and assign designations, types, and branches to pipes.
+
+        Args:
+            pipe_hcs: A dictionary mapping pipe FIDs to the set of house
+                connection IDs they serve.
+            pipe_branches: A dictionary mapping all pipe FIDs to their
+                assigned branch number.
+        """
         log_debug("Generating pipe designations...")
 
         # 1. Build Node -> Pipes map to analyze topology
@@ -338,6 +506,10 @@ class PipeClassifier:
         self.pipe_layer.startEditing()
         self.point_layer.startEditing()
 
+        # 1. Update branch attribute for all pipes that have a branch number
+        for fid, branch_num in pipe_branches.items():
+            self.pipe_layer.changeAttributeValue(fid, idx_branch, branch_num)
+
         # Keep track of assigned building designations to avoid re-numbering
         # Map: building_fid -> designation_string
         building_map: dict[int, str] = {}
@@ -350,9 +522,8 @@ class PipeClassifier:
             feature = self.pipe_layer.getFeature(fid)
             type_val = feature.attribute(idx_type)
 
-            # Placeholder for branch logic.
-            # In a full implementation, this would be calculated via graph traversal.
-            branch_num = "01"
+            # Get the branch number assigned in the previous step
+            branch_num: str = pipe_branches.get(fid, "99")
             designation = ""
 
             # Helper to format building ID (e.g., '5' -> '005')
@@ -364,7 +535,7 @@ class PipeClassifier:
 
             if type_val == PipeType.CONN.translated:
                 # Type 'a': Use the connected building ID
-                target_fid = int(sorted(list(hcs), key=int)[0])
+                target_fid = int(sorted(hcs, key=int)[0])
 
                 # Assign a new designation to the building if it doesn't have one
                 if target_fid not in building_map:
@@ -406,10 +577,9 @@ class PipeClassifier:
                     connected_fids = node_pipes[downstream_node]
                     other_fids = [f for f in connected_fids if f != fid]
                     outgoing_mains = sum(
-                        1
-                        for f_id in other_fids
-                        if self.pipe_layer.getFeature(f_id).attribute(idx_type)
+                        self.pipe_layer.getFeature(f_id).attribute(idx_type)
                         == PipeType.MAIN.translated
+                        for f_id in other_fids
                     )
                     if outgoing_mains > 1:
                         is_fork = True
@@ -422,10 +592,11 @@ class PipeClassifier:
                     # For forks, we target a sub-branch (placeholder '02' for now)
                     designation = f"g{branch_num}-02"
                 else:
-                    target_fid = int(sorted(list(hcs), key=int)[0])
+                    target_fid = int(sorted(hcs, key=int)[0])
 
                     # If we haven't encountered this building via a connection pipe yet,
-                    # we assign it a number now (though usually 'a' pipes are processed too)
+                    # we assign it a number now
+                    # (though usually 'a' pipes are processed too)
                     if target_fid not in building_map:
                         b_desig = f"{branch_num}-{fmt_id(str(building_counter))}"
                         building_map[target_fid] = b_desig
@@ -436,7 +607,6 @@ class PipeClassifier:
 
                     designation = f"v{building_map[target_fid]}"
 
-            self.pipe_layer.changeAttributeValue(fid, idx_branch, branch_num)
             if designation:
                 self.pipe_layer.changeAttributeValue(fid, idx_desig, designation)
 

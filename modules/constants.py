@@ -263,6 +263,11 @@ class Names:
     )
 
     @ClassProperty
+    def layer_group(self) -> str:
+        """Return the layer group name."""
+        return QCoreApplication.translate("cont_Names", "UTEC Network Analysis")
+
+    @ClassProperty
     def new_fittings_layer_suffix(self) -> str:
         """Return the suffix for the new layer name."""
         return QCoreApplication.translate("cont_Names", " - Material")

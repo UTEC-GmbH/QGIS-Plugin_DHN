@@ -45,27 +45,27 @@
         <translation>Das Projekt ist noch nicht gespeichert. Bitte das Projekt abspeichern, damit ein Projektordner erstellt wird.</translation>
     </message>
     <message>
-        <location filename="../modules/layer_manager.py" line="365"/>
+        <location filename="../modules/layer_manager.py" line="386"/>
         <source>Multiple layers selected.</source>
         <translation>Mehrere Layer ausgewählt. Bitte nur einen Layer für die Verarbeitung wählen.</translation>
     </message>
     <message>
-        <location filename="../modules/layer_manager.py" line="369"/>
+        <location filename="../modules/layer_manager.py" line="390"/>
         <source>No layer selected.</source>
         <translation>Kein Layer ausgewählt. Bitte einen Layer für die Verarbeitung wählen.</translation>
     </message>
     <message>
-        <location filename="../modules/layer_manager.py" line="375"/>
+        <location filename="../modules/layer_manager.py" line="396"/>
         <source>Selected node is not a layer.</source>
         <translation>Das ausgewählte Objekt ist kein Layer. Es können nur Vektorlayer mit Linien-Geometrie verarbeitet werden.</translation>
     </message>
     <message>
-        <location filename="../modules/layer_manager.py" line="381"/>
+        <location filename="../modules/layer_manager.py" line="402"/>
         <source>Selected layer is not a vector layer.</source>
         <translation>Der gewählte Layer ist kein Vektorlayer. Es können nur Vektorlayer mit Linien-Geometrie verarbeitet werden.</translation>
     </message>
     <message>
-        <location filename="../modules/layer_manager.py" line="386"/>
+        <location filename="../modules/layer_manager.py" line="407"/>
         <source>The selected layer is not a line layer.</source>
         <translation>Der gewählte Layer ist kein Linien-Layer. Es können nur Vektorlayer mit Linien-Geometrie verarbeitet werden.</translation>
     </message>
@@ -119,42 +119,47 @@
 <context>
     <name>cont_LineLayerFields</name>
     <message>
-        <location filename="../modules/constants.py" line="367"/>
+        <location filename="../modules/constants.py" line="377"/>
         <source>Original ID</source>
         <translation>Original ID</translation>
     </message>
     <message>
-        <location filename="../modules/constants.py" line="371"/>
+        <location filename="../modules/constants.py" line="381"/>
         <source>Original Diameter</source>
         <translation>Original Dimension</translation>
     </message>
     <message>
-        <location filename="../modules/constants.py" line="375"/>
+        <location filename="../modules/constants.py" line="385"/>
         <source>Original Load</source>
         <translation>Original Leistung</translation>
     </message>
     <message>
-        <location filename="../modules/constants.py" line="379"/>
+        <location filename="../modules/constants.py" line="389"/>
         <source>Route length</source>
         <translation>Trassenlänge</translation>
     </message>
     <message>
-        <location filename="../modules/constants.py" line="383"/>
+        <location filename="../modules/constants.py" line="393"/>
         <source>Type</source>
         <translation>Typ</translation>
     </message>
     <message>
-        <location filename="../modules/constants.py" line="387"/>
+        <location filename="../modules/constants.py" line="397"/>
+        <source>Branch</source>
+        <translation>Strang</translation>
+    </message>
+    <message>
+        <location filename="../modules/constants.py" line="401"/>
         <source>Designation</source>
         <translation>Bezeichnung</translation>
     </message>
     <message>
-        <location filename="../modules/constants.py" line="391"/>
+        <location filename="../modules/constants.py" line="405"/>
         <source>Connected Buildings</source>
         <translation>Abnehmer an Teilstrecke</translation>
     </message>
     <message>
-        <location filename="../modules/constants.py" line="395"/>
+        <location filename="../modules/constants.py" line="409"/>
         <source>Notes</source>
         <translation>Anmerkungen</translation>
     </message>
@@ -162,17 +167,22 @@
 <context>
     <name>cont_Names</name>
     <message>
-        <location filename="../modules/constants.py" line="267"/>
+        <location filename="../modules/constants.py" line="268"/>
+        <source>UTEC Network Analysis</source>
+        <translation>UTEC Netzanalyse</translation>
+    </message>
+    <message>
+        <location filename="../modules/constants.py" line="273"/>
         <source> - Material</source>
         <translation> - Massenermittlung</translation>
     </message>
     <message>
-        <location filename="../modules/constants.py" line="272"/>
+        <location filename="../modules/constants.py" line="278"/>
         <source> - Net</source>
         <translation> - Netz</translation>
     </message>
     <message>
-        <location filename="../modules/constants.py" line="277"/>
+        <location filename="../modules/constants.py" line="283"/>
         <source>UTEC_Network</source>
         <translation>UTEC_Netz</translation>
     </message>
@@ -189,41 +199,51 @@
         <source>Connecting Pipe</source>
         <translation>Anschlussleitung</translation>
     </message>
+    <message>
+        <location filename="../modules/constants.py" line="176"/>
+        <source>Main Pipe (Fork)</source>
+        <translation>Gabelung</translation>
+    </message>
 </context>
 <context>
     <name>cont_PointLayerFields</name>
     <message>
-        <location filename="../modules/constants.py" line="316"/>
+        <location filename="../modules/constants.py" line="322"/>
         <source>Type</source>
         <translation>Typ</translation>
     </message>
     <message>
-        <location filename="../modules/constants.py" line="320"/>
+        <location filename="../modules/constants.py" line="326"/>
+        <source>Designation</source>
+        <translation>Bezeichnung</translation>
+    </message>
+    <message>
+        <location filename="../modules/constants.py" line="330"/>
         <source>Diameter 1</source>
         <translation>Dimension 1</translation>
     </message>
     <message>
-        <location filename="../modules/constants.py" line="324"/>
+        <location filename="../modules/constants.py" line="334"/>
         <source>Diameter 2</source>
         <translation>Dimension 2</translation>
     </message>
     <message>
-        <location filename="../modules/constants.py" line="328"/>
+        <location filename="../modules/constants.py" line="338"/>
         <source>Bend-Angle</source>
         <translation>Bogen-Winkel</translation>
     </message>
     <message>
-        <location filename="../modules/constants.py" line="332"/>
+        <location filename="../modules/constants.py" line="342"/>
         <source>Load</source>
         <translation>Leistung</translation>
     </message>
     <message>
-        <location filename="../modules/constants.py" line="336"/>
+        <location filename="../modules/constants.py" line="346"/>
         <source>Connected Pipes</source>
         <translation>Verbundene Leitungen</translation>
     </message>
     <message>
-        <location filename="../modules/constants.py" line="340"/>
+        <location filename="../modules/constants.py" line="350"/>
         <source>Notes</source>
         <translation>Anmerkungen</translation>
     </message>
@@ -302,7 +322,7 @@
         <translation>Untersuche Rohrleitungen...</translation>
     </message>
     <message>
-        <location filename="../modules/layer_manager.py" line="681"/>
+        <location filename="../modules/layer_manager.py" line="700"/>
         <source>Writing results to new layer...</source>
         <translation>Schreibe Ergebnisse in neuen Layer...</translation>
     </message>
