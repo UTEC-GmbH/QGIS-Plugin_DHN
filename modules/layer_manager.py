@@ -6,6 +6,7 @@ This module contains the LayerManager class.
 import contextlib
 import re
 from collections.abc import Callable
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from qgis.core import (
@@ -18,6 +19,7 @@ from qgis.core import (
     QgsFields,
     QgsGeometry,
     QgsLayerTree,
+    QgsLayerTreeGroup,
     QgsLayerTreeNode,
     QgsProject,
     QgsVectorDataProvider,
@@ -115,6 +117,26 @@ class LayerManager:
     def initialize_new_pipe_layer(self) -> None:
         """Initialize the new pipe layer."""
         self.new_line_layer = self.create_line_layer()
+
+    def _get_or_create_group(self) -> QgsLayerTreeGroup:
+        """Get or create a layer tree group.
+
+        Returns:
+            The found or created QgsLayerTreeGroup.
+        """
+        root: QgsLayerTree | None = self.project.layerTreeRoot()
+        if not root:
+            raise_runtime_error("Could not get layer tree root.")
+
+        group_name: str = Names.layer_group
+        group: QgsLayerTreeGroup | None = root.findGroup(group_name)
+        if group is None:
+            group = root.insertGroup(0, group_name)
+            if group is None:
+                raise_runtime_error(f"Could not create group '{group_name}'.")
+            group.setExpanded(True)
+
+        return group
 
     def fix_layer_name(self, name: str) -> str:
         """Fix encoding mojibake and sanitize a string to be a valid layer name.
@@ -398,7 +420,8 @@ class LayerManager:
         log_debug("Creating new layer in GeoPackage...")
 
         gpkg_path: Path = PluginContext.project_gpkg()
-        new_layer_name: str = f"{self.fix_layer_name(self.selected_layer.name())}{Names.new_fittings_layer_suffix}"
+        base_name: str = self.fix_layer_name(self.selected_layer.name())
+        new_layer_name: str = f"{base_name}{Names.new_fittings_layer_suffix}"
 
         if existing_layers := self.project.mapLayersByName(new_layer_name):
             self.project.removeMapLayers([layer.id() for layer in existing_layers])
@@ -426,10 +449,6 @@ class LayerManager:
             Qgis.Success,
         )
 
-        root: QgsLayerTree | None = self.project.layerTreeRoot()
-        if not root:
-            raise_runtime_error("Could not get layer tree root.")
-
         # Construct the layer URI and create a QgsVectorLayer
         uri: str = f"{gpkg_path!s}|layername={new_layer_name}"
         gpkg_layer = QgsVectorLayer(uri, new_layer_name, "ogr")
@@ -441,8 +460,9 @@ class LayerManager:
 
         # Add the layer to the project registry first, but not the layer tree
         self.project.addMapLayer(gpkg_layer, addToLegend=False)
-        # Then, insert it at the top of the layer tree
-        root.insertLayer(0, gpkg_layer)
+        # Then, insert it at the top of the group
+        group: QgsLayerTreeGroup = self._get_or_create_group()
+        group.insertLayer(0, gpkg_layer)
 
         log_debug(
             f"Added layer '{gpkg_layer.name()}' from GeoPackage to the project.",
@@ -540,14 +560,16 @@ class LayerManager:
                 f"Could not find layer '{new_layer_name}' in GeoPackage '{gpkg_path}'"
             )
 
-        if root := self.project.layerTreeRoot():
-            self.project.addMapLayer(gpkg_layer, addToLegend=False)
-            root.insertLayer(1, gpkg_layer)
+        self.project.addMapLayer(gpkg_layer, addToLegend=False)
+        group: QgsLayerTreeGroup = self._get_or_create_group()
+        group.insertLayer(1, gpkg_layer)
 
         log_debug(
             f"Created pipe layer copy '{gpkg_layer.name()}' in GeoPackage.",
             Qgis.Success,
         )
+
+        self.set_line_layer_style(gpkg_layer)
 
         return gpkg_layer
 
@@ -724,9 +746,22 @@ class LayerManager:
         for name, value in variables.items():
             QgsExpressionContextUtils.setLayerVariable(layer, name, value)
 
-        qml_path: Path = PluginContext.resources_path() / "DHN_style.qml"
+        qml_path: Path = PluginContext.resources_path() / "point_style.qml"
 
         layer.loadNamedStyle(str(qml_path))
 
         layer.triggerRepaint()
         log_debug("Layer style set.", Qgis.Success)
+
+    def set_line_layer_style(self, layer: QgsVectorLayer) -> None:
+        """Set the layer style from a QML file for the line layer.
+
+        Args:
+            layer: The layer to apply the style to.
+        """
+        qml_path: Path = PluginContext.resources_path() / "line_style.qml"
+
+        layer.loadNamedStyle(str(qml_path))
+
+        layer.triggerRepaint()
+        log_debug("Line layer style set.", Qgis.Success)
