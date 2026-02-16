@@ -273,7 +273,9 @@ class PipeClassifier:
             if geom := feat.geometry():
                 p = geom.asPoint()
                 key = (round(p.x(), 4), round(p.y(), 4))
-                node_hcs.setdefault(key, set()).add(str(feat.id()))
+                desig = feat.attribute(NewPointLayerFields.designation.field_name)
+                val = str(desig) if desig else str(feat.id())
+                node_hcs.setdefault(key, set()).add(val)
 
         # 3. Peeling Algorithm (Propagate from leaves)
         pipe_hcs: dict[int, set[str]] = {}
@@ -309,7 +311,7 @@ class PipeClassifier:
         )
         if idx != -1:
             for fid, hcs in pipe_hcs.items():
-                val = Names.separator.join(sorted(hcs, key=int))
+                val = Names.separator.join(sorted(hcs))
                 self.pipe_layer.changeAttributeValue(fid, idx, val)
         self.pipe_layer.commitChanges()
 
@@ -325,8 +327,14 @@ class PipeClassifier:
         type_idx = self.pipe_layer.fields().lookupField(
             NewLineLayerFields.type.field_name
         )
+        dim_idx = self.pipe_layer.fields().lookupField(
+            NewLineLayerFields.dim.field_name
+        )
         main_type = PipeType.MAIN.translated
         fork_type = PipeType.FORK.translated
+
+        # Helper to get pipe info
+        pipe_info = {}  # fid -> {dim: int, length: float}
 
         for feat in self.pipe_layer.getFeatures():
             t = feat.attribute(type_idx)
@@ -339,55 +347,19 @@ class PipeClassifier:
                     adj.setdefault(p1, []).append((fid, p2))
                     adj.setdefault(p2, []).append((fid, p1))
 
-        # 2. Identify Junctions (Degree != 2)
-        junctions = {n for n, neighbors in adj.items() if len(neighbors) != 2}
+                    dim_val = feat.attribute(dim_idx)
+                    try:
+                        dim = int(dim_val) if dim_val is not None else 0
+                    except (ValueError, TypeError):
+                        dim = 0
 
-        # 3. Traverse to find Branches
-        branches: list[dict] = []
-        visited_pipes: set[int] = set()
+                    pipe_info[fid] = {"dim": dim, "length": feat.geometry().length()}
 
-        # Start traversal from junctions to ensure we capture full segments
-        start_nodes = (
-            list(junctions) if junctions else (list(adj.keys())[:1] if adj else [])
-        )
-
-        for start_node in start_nodes:
-            for pipe_fid, next_node in adj[start_node]:
-                if pipe_fid in visited_pipes:
-                    continue
-
-                path_nodes = [start_node, next_node]
-                path_pipes = [pipe_fid]
-                visited_pipes.add(pipe_fid)
-
-                curr_node = next_node
-
-                while curr_node not in junctions:
-                    neighbors = adj[curr_node]
-                    # Should have 2 neighbors
-                    next_edge = next(
-                        (e for e in neighbors if e[0] != path_pipes[-1]), None
-                    )
-                    if not next_edge:
-                        break  # Should not happen if graph is correct
-
-                    path_pipes.append(next_edge[0])
-                    path_nodes.append(next_edge[1])
-                    visited_pipes.add(next_edge[0])
-                    curr_node = next_edge[1]
-
-                branches.append(
-                    {
-                        "pipes": path_pipes,
-                        "nodes": path_nodes,  # [Start, ..., End]
-                    }
-                )
-
-        # 4. Orient Network (BFS)
-        # Root is node with max degree (heuristic for heating plant/source)
         if not adj:
             return
 
+        # 2. Orient Network (BFS) to establish depth
+        # Root is node with max degree (heuristic for heating plant/source)
         root = max(adj.keys(), key=lambda n: len(adj[n]))
         node_depth = {root: 0}
         queue = deque([root])
@@ -399,17 +371,70 @@ class PipeClassifier:
                     node_depth[v] = node_depth[u] + 1
                     queue.append(v)
 
-        # Sort branches for deterministic numbering
-        # Sort by depth of start node, then coordinates
-        def branch_sort_key(b: dict) -> tuple:
-            n1, n2 = b["nodes"][0], b["nodes"][-1]
-            d1, d2 = node_depth.get(n1, 0), node_depth.get(n2, 0)
-            min_d = min(d1, d2)
-            return (min_d, n1)
+        # 3. Trace Branches (Main Path Strategy)
+        # List of branches, where each branch is a list of (PipeFID, EndNode)
+        branches: list[list[tuple[int, tuple[float, float]]]] = []
+        visited_pipes: set[int] = set()
 
-        branches.sort(key=branch_sort_key)
+        # Queue for branch starts: (StartNode, FirstPipeFID|None)
+        branch_queue = deque([(root, None)])
 
-        # 5. Map HCs to Nodes
+        while branch_queue:
+            start_node, first_pipe_fid = branch_queue.popleft()
+
+            current_branch = []
+            curr_node = start_node
+
+            # If this is a sub-branch starting with a specific pipe
+            if first_pipe_fid is not None:
+                next_node = next(
+                    (n for f, n in adj[start_node] if f == first_pipe_fid), None
+                )
+                if not next_node:
+                    continue
+
+                current_branch.append((first_pipe_fid, next_node))
+                visited_pipes.add(first_pipe_fid)
+                curr_node = next_node
+
+            # Continue traversing
+            while True:
+                # Get candidates
+                candidates = []
+                for fid, neighbor in adj[curr_node]:
+                    if fid in visited_pipes:
+                        continue
+
+                    # Check flow direction (heuristic: don't go back to lower depth)
+                    if node_depth.get(neighbor, 0) < node_depth.get(curr_node, 0):
+                        continue
+
+                    candidates.append((fid, neighbor))
+
+                if not candidates:
+                    break
+
+                # Sort candidates: Primary: Diameter (desc), Secondary: Length (desc)
+                candidates.sort(
+                    key=lambda x: (pipe_info[x[0]]["dim"], pipe_info[x[0]]["length"]),
+                    reverse=True,
+                )
+
+                # Best candidate continues the branch
+                best_fid, best_node = candidates[0]
+
+                # Others start new branches from the current node
+                for fid, _ in candidates[1:]:
+                    branch_queue.append((curr_node, fid))
+
+                current_branch.append((best_fid, best_node))
+                visited_pipes.add(best_fid)
+                curr_node = best_node
+
+            if current_branch:
+                branches.append(current_branch)
+
+        # 4. Map HCs to Nodes
         node_hcs: dict[tuple[float, float], list[int]] = {}
         hc_req = QgsFeatureRequest().setFilterExpression(
             f'"{NewPointLayerFields.type.field_name}" = '
@@ -423,7 +448,7 @@ class PipeClassifier:
             if main_node:
                 node_hcs.setdefault(main_node, []).append(hc_feat.id())
 
-        # 6. Apply Numbering
+        # 5. Apply Numbering
         idx_desig_pipe = self.pipe_layer.fields().lookupField(
             NewLineLayerFields.designation.field_name
         )
@@ -440,34 +465,11 @@ class PipeClassifier:
         self.pipe_layer.startEditing()
         self.point_layer.startEditing()
 
-        for i, branch in enumerate(branches, 1):
+        for i, branch_pipes in enumerate(branches, 1):
             branch_id = f"{i:02d}"
-
-            # Orient branch: Low Depth -> High Depth
-            nodes = branch["nodes"]
-            pipes = branch["pipes"]
-
-            d_start = node_depth.get(nodes[0], 0)
-            d_end = node_depth.get(nodes[-1], 0)
-
-            if d_start > d_end:
-                nodes.reverse()
-                pipes.reverse()
-
-            # Iterate backwards (End -> Start)
-            # Nodes: N0 --P0--> N1 --P1--> N2
-            # We iterate N2, N1.
-            # Pipe feeding N2 is P1. Pipe feeding N1 is P0.
-
             counter = 1
 
-            # Zip pipes with their downstream nodes
-            # pipes: [P0, P1], nodes: [N0, N1, N2]
-            # pairs: (P1, N2), (P0, N1)
-
-            pairs = list(zip(pipes, nodes[1:]))
-
-            for pipe_fid, node in reversed(pairs):
+            for pipe_fid, node in branch_pipes:
                 # Update Branch ID
                 self.pipe_layer.changeAttributeValue(
                     pipe_fid, idx_branch_pipe, branch_id
@@ -476,6 +478,9 @@ class PipeClassifier:
                 hcs = node_hcs.get(node, [])
 
                 if hcs:
+                    # Sort HCs by connecting pipe length (descending)
+                    hcs.sort(key=self._get_conn_pipe_length, reverse=True)
+
                     # House Connection Node
                     for hc_fid in hcs:
                         num_str = f"{branch_id}-{counter:03d}"
@@ -505,7 +510,7 @@ class PipeClassifier:
                     )
 
                     # If it feeds a fork, set type to FORK
-                    if node in junctions:
+                    if len(adj[node]) > 2:  # noqa: PLR2004
                         self.pipe_layer.changeAttributeValue(
                             pipe_fid, idx_type_pipe, PipeType.FORK.translated
                         )
@@ -514,6 +519,24 @@ class PipeClassifier:
 
         self.pipe_layer.commitChanges()
         self.point_layer.commitChanges()
+
+    def _get_conn_pipe_length(self, hc_fid: int) -> float:
+        """Get the length of the connecting pipe for a given HC."""
+        hc_feat = self.point_layer.getFeature(hc_fid)
+        if not hc_feat.isValid():
+            return 0.0
+
+        hc_pt = hc_feat.geometry().asPoint()
+        pipes = self._get_pipes_at_point(hc_pt)
+        conn_type = PipeType.CONN.translated
+        type_idx = self.pipe_layer.fields().lookupField(
+            NewLineLayerFields.type.field_name
+        )
+
+        for pipe in pipes:
+            if pipe.attribute(type_idx) == conn_type:
+                return pipe.geometry().length()
+        return 0.0
 
     def _find_main_node_for_hc(
         self, hc_pt: QgsPointXY, adj: dict

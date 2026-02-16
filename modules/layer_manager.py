@@ -21,7 +21,9 @@ from qgis.core import (
     QgsLayerTree,
     QgsLayerTreeGroup,
     QgsLayerTreeNode,
+    QgsPointXY,
     QgsProject,
+    QgsSpatialIndex,
     QgsVectorDataProvider,
     QgsVectorFileWriter,
     QgsVectorLayer,
@@ -38,6 +40,7 @@ from .constants import (
     Names,
     NewLineLayerFields,
     NewPointLayerFields,
+    Numbers,
     PipeType,
     QMT_Int,
 )
@@ -425,6 +428,9 @@ class LayerManager:
         """
         # 1. Collect split points from the point layer
         split_points: set[tuple[float, float]] = set()
+        split_point_geoms: dict[int, QgsPointXY] = {}
+        sp_index = QgsSpatialIndex()
+
         if self._new_point_layer:
             type_idx = self._new_point_layer.fields().lookupField(
                 NewPointLayerFields.type.field_name
@@ -432,17 +438,17 @@ class LayerManager:
             split_types = {
                 FittingType.T_PIECE.translated,
                 FittingType.HOUSE_CONN.translated,
-                FittingType.REDUCER.translated,
-                FittingType.QUESTIONABLE.translated,
             }
             for feat in self._new_point_layer.getFeatures():
                 if feat.attribute(type_idx) in split_types:
                     if geom := feat.geometry():
                         p = geom.asPoint()
                         split_points.add((round(p.x(), 4), round(p.y(), 4)))
+                        split_point_geoms[feat.id()] = p
+                        sp_index.addFeature(feat)
 
         # 2. Build Graph
-        edges: dict[tuple[int, int], dict] = {}
+        edges: dict[tuple[int, int, int], dict] = {}
         features_map: dict[int, QgsFeature] = {}
 
         for feat in source_layer.getFeatures():
@@ -462,25 +468,84 @@ class LayerManager:
             for idx, part in enumerate(parts):
                 if len(part) < 2:
                     continue
-                u = (round(part[0].x(), 4), round(part[0].y(), 4))
-                v = (round(part[-1].x(), 4), round(part[-1].y(), 4))
-                edge_id = (feat.id(), idx)
-                edges[edge_id] = {
-                    "points": part,
-                    "attrs": attrs,
-                    "u": u,
-                    "v": v,
-                    "fid": feat.id(),
-                }
 
-        node_to_edges: dict[tuple, list[tuple[int, int]]] = {}
+                # Inject split points into the part if they lie on the line
+                part_geom = QgsGeometry.fromPolylineXY(part)
+                candidates = sp_index.intersects(part_geom.boundingBox())
+                points_on_part = []
+
+                for cid in candidates:
+                    pt = split_point_geoms[cid]
+                    if (
+                        part_geom.distance(QgsGeometry.fromPointXY(pt))
+                        < Numbers.tiny_number
+                    ):
+                        points_on_part.append(pt)
+
+                if points_on_part:
+                    new_part = [part[0]]
+                    for i in range(len(part) - 1):
+                        p_start = part[i]
+                        p_end = part[i + 1]
+
+                        segment_points = []
+                        seg_geom = QgsGeometry.fromPolylineXY([p_start, p_end])
+
+                        for pt in points_on_part:
+                            if (
+                                seg_geom.distance(QgsGeometry.fromPointXY(pt))
+                                < Numbers.tiny_number
+                            ):
+                                if not pt.compare(
+                                    p_start, Numbers.tiny_number
+                                ) and not pt.compare(p_end, Numbers.tiny_number):
+                                    segment_points.append(pt)
+
+                        if segment_points:
+                            segment_points.sort(key=lambda p: p_start.sqrDist(p))
+                            new_part.extend(segment_points)
+
+                        new_part.append(p_end)
+                    part = new_part
+
+                # Split segment if it passes through a split point
+                segments = []
+                current_segment = [part[0]]
+
+                for i in range(1, len(part)):
+                    p = part[i]
+                    p_key = (round(p.x(), 4), round(p.y(), 4))
+                    current_segment.append(p)
+
+                    if p_key in split_points and i < len(part) - 1:
+                        segments.append(current_segment)
+                        current_segment = [p]
+
+                segments.append(current_segment)
+
+                for seg_i, segment in enumerate(segments):
+                    if len(segment) < 2:
+                        continue
+
+                    u = (round(segment[0].x(), 4), round(segment[0].y(), 4))
+                    v = (round(segment[-1].x(), 4), round(segment[-1].y(), 4))
+                    edge_id = (feat.id(), idx, seg_i)
+                    edges[edge_id] = {
+                        "points": segment,
+                        "attrs": attrs,
+                        "u": u,
+                        "v": v,
+                        "fid": feat.id(),
+                    }
+
+        node_to_edges: dict[tuple, list[tuple[int, int, int]]] = {}
         for eid, data in edges.items():
             node_to_edges.setdefault(data["u"], []).append(eid)
             node_to_edges.setdefault(data["v"], []).append(eid)
 
         # 3. Traverse and Merge
         merged_features: list[QgsFeature] = []
-        visited_edges: set[tuple[int, int]] = set()
+        visited_edges: set[tuple[int, int, int]] = set()
 
         for eid in edges:
             if eid in visited_edges:
