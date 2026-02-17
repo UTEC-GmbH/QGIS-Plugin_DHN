@@ -339,6 +339,7 @@ class DHN(QObject):
 
                 # --- Log and display result summary ---
                 self.layer_manager.set_point_layer_style(new_layer)
+                self.layer_manager.set_line_layer_style(pipe_layer_copy)
                 summary_single_line: str = create_summary_message(
                     new_layer, reprojected_layer.name(), multiline=False
                 )

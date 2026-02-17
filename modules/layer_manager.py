@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 from qgis.core import (
     Qgis,
+    QgsCategorizedSymbolRenderer,
     QgsCoordinateReferenceSystem,
     QgsCoordinateTransform,
     QgsExpressionContextUtils,
@@ -21,7 +22,11 @@ from qgis.core import (
     QgsLayerTree,
     QgsLayerTreeGroup,
     QgsLayerTreeNode,
+    QgsPointXY,
     QgsProject,
+    QgsRandomColorRamp,
+    QgsRendererCategory,
+    QgsSpatialIndex,
     QgsVectorDataProvider,
     QgsVectorFileWriter,
     QgsVectorLayer,
@@ -34,9 +39,11 @@ from qgis.PyQt.QtWidgets import QProgressBar
 from .constants import (
     PROBLEMATIC_FIELD_TYPES,
     Colours,
+    FittingType,
     Names,
     NewLineLayerFields,
     NewPointLayerFields,
+    Numbers,
     PipeType,
     QMT_Int,
 )
@@ -411,6 +418,259 @@ class LayerManager:
         # Reproject the layer to the project's CRS
         return self.reproject_layer_to_project_crs(selected_layer)
 
+    def _create_merged_line_features(
+        self,
+        source_layer: QgsVectorLayer,
+        target_fields: QgsFields,
+        dim_field: str | None,
+        load_field: str | None,
+    ) -> list[QgsFeature]:
+        """Create merged line features from the source layer.
+
+        Merges connected lines with same attributes between split nodes.
+        """
+        # 1. Collect split points from the point layer
+        split_points: set[tuple[float, float]] = set()
+        split_point_geoms: dict[int, QgsPointXY] = {}
+        sp_index = QgsSpatialIndex()
+
+        if self._new_point_layer:
+            type_idx = self._new_point_layer.fields().lookupField(
+                NewPointLayerFields.type.field_name
+            )
+            split_types = {
+                FittingType.T_PIECE.translated,
+                FittingType.HOUSE_CONN.translated,
+            }
+            for feat in self._new_point_layer.getFeatures():
+                if feat.attribute(type_idx) in split_types:
+                    if geom := feat.geometry():
+                        p = geom.asPoint()
+                        split_points.add((round(p.x(), 4), round(p.y(), 4)))
+                        split_point_geoms[feat.id()] = p
+                        sp_index.addFeature(feat)
+
+        # 2. Build Graph
+        edges: dict[tuple[int, int, int], dict] = {}
+        features_map: dict[int, QgsFeature] = {}
+
+        for feat in source_layer.getFeatures():
+            geom = feat.geometry()
+            if not geom:
+                continue
+            features_map[feat.id()] = feat
+
+            parts = (
+                geom.asMultiPolyline() if geom.isMultipart() else [geom.asPolyline()]
+            )
+
+            dim_val = feat.attribute(dim_field) if dim_field else None
+            load_val = feat.attribute(load_field) if load_field else None
+            attrs = (dim_val, load_val)
+
+            for idx, part in enumerate(parts):
+                if len(part) < 2:
+                    continue
+
+                # Inject split points into the part if they lie on the line
+                part_geom = QgsGeometry.fromPolylineXY(part)
+                candidates = sp_index.intersects(part_geom.boundingBox())
+                points_on_part = []
+
+                for cid in candidates:
+                    pt = split_point_geoms[cid]
+                    if (
+                        part_geom.distance(QgsGeometry.fromPointXY(pt))
+                        < Numbers.tiny_number
+                    ):
+                        points_on_part.append(pt)
+
+                if points_on_part:
+                    new_part = [part[0]]
+                    for i in range(len(part) - 1):
+                        p_start = part[i]
+                        p_end = part[i + 1]
+
+                        segment_points = []
+                        seg_geom = QgsGeometry.fromPolylineXY([p_start, p_end])
+
+                        for pt in points_on_part:
+                            if (
+                                seg_geom.distance(QgsGeometry.fromPointXY(pt))
+                                < Numbers.tiny_number
+                            ):
+                                if not pt.compare(
+                                    p_start, Numbers.tiny_number
+                                ) and not pt.compare(p_end, Numbers.tiny_number):
+                                    segment_points.append(pt)
+
+                        if segment_points:
+                            segment_points.sort(key=lambda p: p_start.sqrDist(p))
+                            new_part.extend(segment_points)
+
+                        new_part.append(p_end)
+                    part = new_part
+
+                # Split segment if it passes through a split point
+                segments = []
+                current_segment = [part[0]]
+
+                for i in range(1, len(part)):
+                    p = part[i]
+                    p_key = (round(p.x(), 4), round(p.y(), 4))
+                    current_segment.append(p)
+
+                    if p_key in split_points and i < len(part) - 1:
+                        segments.append(current_segment)
+                        current_segment = [p]
+
+                segments.append(current_segment)
+
+                for seg_i, segment in enumerate(segments):
+                    if len(segment) < 2:
+                        continue
+
+                    u = (round(segment[0].x(), 4), round(segment[0].y(), 4))
+                    v = (round(segment[-1].x(), 4), round(segment[-1].y(), 4))
+                    edge_id = (feat.id(), idx, seg_i)
+                    edges[edge_id] = {
+                        "points": segment,
+                        "attrs": attrs,
+                        "u": u,
+                        "v": v,
+                        "fid": feat.id(),
+                    }
+
+        node_to_edges: dict[tuple, list[tuple[int, int, int]]] = {}
+        for eid, data in edges.items():
+            node_to_edges.setdefault(data["u"], []).append(eid)
+            node_to_edges.setdefault(data["v"], []).append(eid)
+
+        # 3. Traverse and Merge
+        merged_features: list[QgsFeature] = []
+        visited_edges: set[tuple[int, int, int]] = set()
+
+        for eid in edges:
+            if eid in visited_edges:
+                continue
+
+            path_edges = [eid]
+            visited_edges.add(eid)
+            current_attrs = edges[eid]["attrs"]
+
+            # Grow Forward (from v)
+            curr_node = edges[eid]["v"]
+            while True:
+                if curr_node in split_points:
+                    break
+
+                candidates = node_to_edges.get(curr_node, [])
+                valid_next = [
+                    c
+                    for c in candidates
+                    if c != path_edges[-1]
+                    and c not in visited_edges
+                    and edges[c]["attrs"] == current_attrs
+                ]
+
+                if len(valid_next) == 1:
+                    next_eid = valid_next[0]
+                    path_edges.append(next_eid)
+                    visited_edges.add(next_eid)
+                    e_data = edges[next_eid]
+                    curr_node = e_data["v"] if e_data["u"] == curr_node else e_data["u"]
+                else:
+                    break
+
+            # Grow Backward (from u)
+            curr_node = edges[eid]["u"]
+            while True:
+                if curr_node in split_points:
+                    break
+
+                candidates = node_to_edges.get(curr_node, [])
+                valid_prev = [
+                    c
+                    for c in candidates
+                    if c != path_edges[0]
+                    and c not in visited_edges
+                    and edges[c]["attrs"] == current_attrs
+                ]
+
+                if len(valid_prev) == 1:
+                    prev_eid = valid_prev[0]
+                    path_edges.insert(0, prev_eid)
+                    visited_edges.add(prev_eid)
+                    e_data = edges[prev_eid]
+                    curr_node = e_data["u"] if e_data["v"] == curr_node else e_data["v"]
+                else:
+                    break
+
+            # Construct Geometry
+            e0 = edges[path_edges[0]]
+            pts = e0["points"]
+
+            if len(path_edges) > 1:
+                e1 = edges[path_edges[1]]
+                p_end = e0["v"]
+                if p_end == e1["u"] or p_end == e1["v"]:
+                    current_pts = list(pts)
+                    last_node = p_end
+                else:
+                    current_pts = list(reversed(pts))
+                    last_node = e0["u"]
+            else:
+                current_pts = list(pts)
+                last_node = e0["v"]
+
+            full_points = list(current_pts)
+
+            for i in range(1, len(path_edges)):
+                next_e = edges[path_edges[i]]
+                next_pts = next_e["points"]
+
+                if next_e["u"] == last_node:
+                    full_points.extend(next_pts[1:])
+                    last_node = next_e["v"]
+                elif next_e["v"] == last_node:
+                    full_points.extend(list(reversed(next_pts))[1:])
+                    last_node = next_e["u"]
+
+            new_feat = QgsFeature(target_fields)
+            new_feat.setGeometry(QgsGeometry.fromPolylineXY(full_points))
+
+            first_fid = edges[path_edges[0]]["fid"]
+            source_feat = features_map[first_fid]
+
+            new_feat.setAttribute(
+                NewLineLayerFields.org_id.field_name,
+                source_feat.attribute("original_fid"),
+            )
+            if dim_field:
+                new_feat.setAttribute(
+                    NewLineLayerFields.dim.field_name, source_feat.attribute(dim_field)
+                )
+            if load_field:
+                new_feat.setAttribute(
+                    NewLineLayerFields.load.field_name,
+                    source_feat.attribute(load_field),
+                )
+
+            new_feat.setAttribute(
+                NewLineLayerFields.length.field_name, new_feat.geometry().length()
+            )
+            new_feat.setAttribute(
+                NewLineLayerFields.type.field_name, PipeType.MAIN.translated
+            )
+
+            merged_features.append(new_feat)
+
+        log_debug(
+            f"Merged {len(edges)} segments into {len(merged_features)} features.",
+            Qgis.Success,
+        )
+        return merged_features
+
     def create_point_layer(self) -> QgsVectorLayer:
         """Create an empty point layer in the project's GeoPackage.
 
@@ -515,34 +775,12 @@ class LayerManager:
         load_field_name: str | None = found_fields.load
 
         # 3. Populate the temporary layer with features and mapped attributes
-        new_features: list[QgsFeature] = []
-        for source_feature in self.selected_layer.getFeatures():
-            new_feature = QgsFeature(temp_pipe_layer.fields())
-            new_feature.setGeometry(source_feature.geometry())
-
-            new_feature.setAttribute(
-                NewLineLayerFields.org_id.field_name,
-                source_feature.attribute("original_fid"),
-            )
-            if dim_field_name:
-                new_feature.setAttribute(
-                    NewLineLayerFields.dim.field_name,
-                    source_feature.attribute(dim_field_name),
-                )
-            if load_field_name:
-                new_feature.setAttribute(
-                    NewLineLayerFields.load.field_name,
-                    source_feature.attribute(load_field_name),
-                )
-
-            new_feature.setAttribute(
-                NewLineLayerFields.length.field_name, source_feature.geometry().length()
-            )
-
-            new_feature.setAttribute(
-                NewLineLayerFields.type.field_name, PipeType.MAIN.translated
-            )
-            new_features.append(new_feature)
+        new_features: list[QgsFeature] = self._create_merged_line_features(
+            self.selected_layer,
+            temp_pipe_layer.fields(),
+            dim_field_name,
+            load_field_name,
+        )
 
         temp_pipe_layer.startEditing()
         temp_pipe_layer.addFeatures(new_features)
@@ -762,6 +1000,39 @@ class LayerManager:
         qml_path: Path = PluginContext.resources_path() / "line_style.qml"
 
         layer.loadNamedStyle(str(qml_path))
+
+        renderer = layer.renderer()
+        if isinstance(renderer, QgsCategorizedSymbolRenderer):
+            # Preserve the source symbol and color ramp from the QML style
+            source_symbol = renderer.sourceSymbol()
+            source_ramp = renderer.sourceColorRamp()
+
+            field_name: str = NewLineLayerFields.branch.field_name
+            renderer.setClassAttribute(field_name)
+
+            field_index: int = layer.fields().lookupField(field_name)
+            if field_index != -1:
+                unique_values: set = layer.uniqueValues(field_index)
+                categories: list[QgsRendererCategory] = []
+
+                for value in sorted(unique_values, key=str):
+                    if value in (None, ""):
+                        continue
+                    symbol = source_symbol.clone() if source_symbol else None
+                    category = QgsRendererCategory(value, symbol, str(value))
+                    categories.append(category)
+
+                renderer.deleteAllCategories()
+                for category in categories:
+                    renderer.addCategory(category)
+
+                if not source_ramp:
+                    source_ramp = QgsRandomColorRamp()
+
+                renderer.updateColorRamp(source_ramp)
+
+            if self.iface.layerTreeView():
+                self.iface.layerTreeView().refreshLayerSymbology(layer.id())
 
         layer.triggerRepaint()
         log_debug("Line layer style set.", Qgis.Success)
