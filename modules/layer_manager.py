@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 from qgis.core import (
     Qgis,
+    QgsCategorizedSymbolRenderer,
     QgsCoordinateReferenceSystem,
     QgsCoordinateTransform,
     QgsExpressionContextUtils,
@@ -23,6 +24,8 @@ from qgis.core import (
     QgsLayerTreeNode,
     QgsPointXY,
     QgsProject,
+    QgsRandomColorRamp,
+    QgsRendererCategory,
     QgsSpatialIndex,
     QgsVectorDataProvider,
     QgsVectorFileWriter,
@@ -997,6 +1000,39 @@ class LayerManager:
         qml_path: Path = PluginContext.resources_path() / "line_style.qml"
 
         layer.loadNamedStyle(str(qml_path))
+
+        renderer = layer.renderer()
+        if isinstance(renderer, QgsCategorizedSymbolRenderer):
+            # Preserve the source symbol and color ramp from the QML style
+            source_symbol = renderer.sourceSymbol()
+            source_ramp = renderer.sourceColorRamp()
+
+            field_name: str = NewLineLayerFields.branch.field_name
+            renderer.setClassAttribute(field_name)
+
+            field_index: int = layer.fields().lookupField(field_name)
+            if field_index != -1:
+                unique_values: set = layer.uniqueValues(field_index)
+                categories: list[QgsRendererCategory] = []
+
+                for value in sorted(unique_values, key=str):
+                    if value in (None, ""):
+                        continue
+                    symbol = source_symbol.clone() if source_symbol else None
+                    category = QgsRendererCategory(value, symbol, str(value))
+                    categories.append(category)
+
+                renderer.deleteAllCategories()
+                for category in categories:
+                    renderer.addCategory(category)
+
+                if not source_ramp:
+                    source_ramp = QgsRandomColorRamp()
+
+                renderer.updateColorRamp(source_ramp)
+
+            if self.iface.layerTreeView():
+                self.iface.layerTreeView().refreshLayerSymbology(layer.id())
 
         layer.triggerRepaint()
         log_debug("Line layer style set.", Qgis.Success)
