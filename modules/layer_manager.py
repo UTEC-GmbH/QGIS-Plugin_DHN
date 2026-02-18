@@ -17,16 +17,12 @@ from qgis.core import (
     QgsExpressionContextUtils,
     QgsFeature,
     QgsField,
-    QgsFields,
-    QgsGeometry,
     QgsLayerTree,
     QgsLayerTreeGroup,
     QgsLayerTreeNode,
-    QgsPointXY,
     QgsProject,
     QgsRandomColorRamp,
     QgsRendererCategory,
-    QgsSpatialIndex,
     QgsVectorDataProvider,
     QgsVectorFileWriter,
     QgsVectorLayer,
@@ -39,22 +35,20 @@ from qgis.PyQt.QtWidgets import QProgressBar
 from .constants import (
     PROBLEMATIC_FIELD_TYPES,
     Colours,
-    FittingType,
     Names,
     NewLineLayerFields,
     NewPointLayerFields,
-    Numbers,
-    PipeType,
     QMT_Int,
 )
 from .context import PluginContext
+from .line_merger import LineMerger
 from .logs_and_errors import log_debug, raise_runtime_error, raise_user_error
 from .vector_analysis_tools import FieldNames, VectorAnalysisTools
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from qgis.core import QgsMapLayer
+    from qgis.core import QgsFields, QgsMapLayer
     from qgis.gui import QgsLayerTreeView
 
 
@@ -170,178 +164,6 @@ class LayerManager:
 
         return sanitized_name
 
-    def _create_reprojected_layer_structure(
-        self, source_layer: QgsVectorLayer
-    ) -> QgsVectorLayer:
-        """Create the structure (fields, CRS) for the reprojected layer.
-
-        Args:
-            source_layer: The source layer to copy structure from.
-
-        Returns:
-            A new memory layer with the reprojected structure.
-        """
-        target_crs: QgsCoordinateReferenceSystem = self.project.crs()
-        if source_layer.crs() == target_crs:
-            log_debug(
-                "Layer CRS matches project CRS. "
-                "Creating new layer with filtered fields.",
-                Qgis.Success,
-            )
-        else:
-            log_debug(
-                f"Layer CRS ({source_layer.crs().authid()}) does not match project CRS "
-                f"({target_crs.authid()}). Reprojecting...",
-                icon="♻️",
-            )
-
-        geometry_type_str: str = QgsWkbTypes.displayString(source_layer.wkbType())
-        reprojected_layer = QgsVectorLayer(
-            f"{geometry_type_str}?crs={target_crs.authid()}",
-            source_layer.name(),
-            "memory",
-        )
-
-        data_provider: QgsVectorDataProvider | None = reprojected_layer.dataProvider()
-        if data_provider is None:
-            raise_runtime_error(
-                f"Could not get data provider for layer: {reprojected_layer.name()}"
-            )
-
-        filtered_fields: list[QgsField] = []
-        for field in source_layer.fields():
-            if field.type() not in PROBLEMATIC_FIELD_TYPES and field.name() != "fid":
-                filtered_fields.append(field)
-            else:
-                log_debug(
-                    f"Skipping problematic field '{field.name()}' of type "
-                    f"'{field.typeName()}' during layer reprojection/cloning."
-                )
-
-        data_provider.addAttributes(filtered_fields)
-        data_provider.addAttributes([QgsField("original_fid", QMT_Int)])
-        reprojected_layer.updateFields()
-        log_debug(
-            f"The in-memory layer has {len(reprojected_layer.fields())} fields "
-            f"(the selected layer has {len(source_layer.fields())} fields).",
-            icon="🐞",
-        )
-        return reprojected_layer
-
-    def _create_reprojected_feature(
-        self,
-        source_feature: QgsFeature,
-        target_fields: QgsFields,
-        transform: QgsCoordinateTransform,
-    ) -> QgsFeature | None:
-        """Create a single reprojected feature with mapped attributes.
-
-        Args:
-            source_feature: The feature to reproject.
-            target_fields: The fields of the target layer.
-            transform: The coordinate transform to apply.
-
-        Returns:
-            The reprojected feature, or None if reprojection failed.
-        """
-        try:
-            new_feature = QgsFeature()
-            new_feature.setFields(target_fields, initAttributes=True)
-            new_feature.setAttribute("original_fid", source_feature.id())
-
-            for field in target_fields:
-                if source_feature.fieldNameIndex(field.name()) != -1:
-                    new_feature.setAttribute(
-                        field.name(), source_feature.attribute(field.name())
-                    )
-
-            geom: QgsGeometry = source_feature.geometry()
-            if geom.transform(transform) != 0:
-                log_debug(
-                    f"Feature {source_feature.id()} could not be reprojected.",
-                    Qgis.Warning,
-                )
-                return None
-
-            new_feature.setGeometry(geom)
-
-        except (AttributeError, TypeError, ValueError, RuntimeError) as e:
-            log_debug(
-                f"Could not process feature with ID {source_feature.id()} "
-                f"for reprojection: {e!s}",
-                Qgis.Warning,
-            )
-            return None
-
-        else:
-            return new_feature
-
-    def _populate_reprojected_layer(
-        self, source_layer: QgsVectorLayer, target_layer: QgsVectorLayer
-    ) -> None:
-        """Reproject features and add them to the target layer.
-
-        Args:
-            source_layer: The layer containing original features.
-            target_layer: The layer to populate with reprojected features.
-        """
-        transform = QgsCoordinateTransform(
-            source_layer.crs(), self.project.crs(), self.project.transformContext()
-        )
-
-        all_ids: list = list(source_layer.allFeatureIds())
-        log_debug(f"Found {len(all_ids)} feature IDs in the selected layer.")
-        if not all_ids:
-            return
-
-        new_features: list[QgsFeature] = []
-        for fid in all_ids:
-            source_feature: QgsFeature = source_layer.getFeature(fid)
-            if new_feature := self._create_reprojected_feature(
-                source_feature, target_layer.fields(), transform
-            ):
-                new_features.append(new_feature)
-
-        log_debug(f"Processed {len(new_features)} features for reprojection.")
-
-        if new_features:
-            self._add_features_to_layer(target_layer, new_features)
-
-    def _add_features_to_layer(
-        self, target_layer: QgsVectorLayer, new_features: list[QgsFeature]
-    ) -> None:
-        """Add features to the target layer.
-
-        Args:
-            target_layer: The layer to add features to.
-            new_features: The list of features to add.
-        """
-        target_layer.startEditing()
-        target_layer.addFeatures(new_features)
-
-        # Add the in-memory layer to the project to ensure
-        # it's not garbage collected or invalidated.
-        # We don't add it to the layer tree, so it remains invisible.
-        self.project.addMapLayer(target_layer, addToLegend=False)
-        log_debug(
-            f"Added reprojected layer to map registry. "
-            f"Feature count: {target_layer.featureCount()}"
-        )
-
-        if target_layer.commitChanges():
-            log_debug(
-                f"Successfully committed {target_layer.featureCount()} "
-                "features to reprojected in-memory layer.",
-                Qgis.Success,
-            )
-        else:
-            log_debug(
-                f"Failed to commit changes to reprojected in-memory layer. "
-                f"Feature count: {target_layer.featureCount()}",
-                Qgis.Critical,
-            )
-        target_layer.updateExtents()
-
     def reproject_layer_to_project_crs(self, layer: QgsVectorLayer) -> QgsVectorLayer:
         """Reproject a vector layer to the project's CRS.
 
@@ -354,23 +176,66 @@ class LayerManager:
         Returns:
             A new, reprojected in-memory QgsVectorLayer.
         """
-        log_debug("Creating in-memory layer for reprojection and field filtering.")
+        target_crs: QgsCoordinateReferenceSystem = self.project.crs()
+        if layer.crs() != target_crs:
+            log_debug(
+                f"Layer CRS ({layer.crs().authid()}) does not match project CRS "
+                f"({target_crs.authid()}). Reprojecting...",
+                icon="♻️",
+            )
 
         # Clear any selection on the layer
         layer.removeSelection()
 
-        reprojected_layer: QgsVectorLayer = self._create_reprojected_layer_structure(
-            layer
-        )
-        self._populate_reprojected_layer(layer, reprojected_layer)
+        # Create memory layer
+        uri = f"{QgsWkbTypes.displayString(layer.wkbType())}?crs={target_crs.authid()}"
+        reprojected_layer = QgsVectorLayer(uri, layer.name(), "memory")
+        dp = reprojected_layer.dataProvider()
+        if not dp:
+            raise_runtime_error(
+                f"Could not get data provider for layer: {reprojected_layer.name()}"
+            )
 
-        log_debug(
-            f"The selected layer has {layer.featureCount()} features "
-            f"and {len(layer.fields())} fields."
-            f"The reprojected layer has {reprojected_layer.featureCount()} features "
-            f"and {len(reprojected_layer.fields())} fields.",
-            icon="🐞",
+        # Add fields
+        fields = [
+            f
+            for f in layer.fields()
+            if f.type() not in PROBLEMATIC_FIELD_TYPES and f.name() != "fid"
+        ]
+        dp.addAttributes(fields + [QgsField("original_fid", QMT_Int)])
+        reprojected_layer.updateFields()
+
+        # Reproject features
+        transform = QgsCoordinateTransform(
+            layer.crs(), target_crs, self.project.transformContext()
         )
+        new_features = []
+        target_fields = reprojected_layer.fields()
+
+        for feat in layer.getFeatures():
+            new_feat = QgsFeature(target_fields)
+            geom = feat.geometry()
+            if geom.transform(transform) == 0:
+                new_feat.setGeometry(geom)
+                new_feat.setAttribute("original_fid", feat.id())
+                # Map attributes
+                for field in fields:
+                    idx = feat.fieldNameIndex(field.name())
+                    if idx != -1:
+                        new_feat.setAttribute(field.name(), feat.attribute(idx))
+                new_features.append(new_feat)
+            else:
+                log_debug(
+                    f"Feature {feat.id()} could not be reprojected.", Qgis.Warning
+                )
+
+        reprojected_layer.startEditing()
+        reprojected_layer.addFeatures(new_features)
+        reprojected_layer.commitChanges()
+
+        # Add to project (invisible)
+        self.project.addMapLayer(reprojected_layer, addToLegend=False)
+
         return reprojected_layer
 
     def get_selected_layer(self) -> QgsVectorLayer:
@@ -418,259 +283,6 @@ class LayerManager:
         # Reproject the layer to the project's CRS
         return self.reproject_layer_to_project_crs(selected_layer)
 
-    def _create_merged_line_features(
-        self,
-        source_layer: QgsVectorLayer,
-        target_fields: QgsFields,
-        dim_field: str | None,
-        load_field: str | None,
-    ) -> list[QgsFeature]:
-        """Create merged line features from the source layer.
-
-        Merges connected lines with same attributes between split nodes.
-        """
-        # 1. Collect split points from the point layer
-        split_points: set[tuple[float, float]] = set()
-        split_point_geoms: dict[int, QgsPointXY] = {}
-        sp_index = QgsSpatialIndex()
-
-        if self._new_point_layer:
-            type_idx = self._new_point_layer.fields().lookupField(
-                NewPointLayerFields.type.field_name
-            )
-            split_types = {
-                FittingType.T_PIECE.translated,
-                FittingType.HOUSE_CONN.translated,
-            }
-            for feat in self._new_point_layer.getFeatures():
-                if feat.attribute(type_idx) in split_types:
-                    if geom := feat.geometry():
-                        p = geom.asPoint()
-                        split_points.add((round(p.x(), 4), round(p.y(), 4)))
-                        split_point_geoms[feat.id()] = p
-                        sp_index.addFeature(feat)
-
-        # 2. Build Graph
-        edges: dict[tuple[int, int, int], dict] = {}
-        features_map: dict[int, QgsFeature] = {}
-
-        for feat in source_layer.getFeatures():
-            geom = feat.geometry()
-            if not geom:
-                continue
-            features_map[feat.id()] = feat
-
-            parts = (
-                geom.asMultiPolyline() if geom.isMultipart() else [geom.asPolyline()]
-            )
-
-            dim_val = feat.attribute(dim_field) if dim_field else None
-            load_val = feat.attribute(load_field) if load_field else None
-            attrs = (dim_val, load_val)
-
-            for idx, part in enumerate(parts):
-                if len(part) < 2:
-                    continue
-
-                # Inject split points into the part if they lie on the line
-                part_geom = QgsGeometry.fromPolylineXY(part)
-                candidates = sp_index.intersects(part_geom.boundingBox())
-                points_on_part = []
-
-                for cid in candidates:
-                    pt = split_point_geoms[cid]
-                    if (
-                        part_geom.distance(QgsGeometry.fromPointXY(pt))
-                        < Numbers.tiny_number
-                    ):
-                        points_on_part.append(pt)
-
-                if points_on_part:
-                    new_part = [part[0]]
-                    for i in range(len(part) - 1):
-                        p_start = part[i]
-                        p_end = part[i + 1]
-
-                        segment_points = []
-                        seg_geom = QgsGeometry.fromPolylineXY([p_start, p_end])
-
-                        for pt in points_on_part:
-                            if (
-                                seg_geom.distance(QgsGeometry.fromPointXY(pt))
-                                < Numbers.tiny_number
-                            ):
-                                if not pt.compare(
-                                    p_start, Numbers.tiny_number
-                                ) and not pt.compare(p_end, Numbers.tiny_number):
-                                    segment_points.append(pt)
-
-                        if segment_points:
-                            segment_points.sort(key=lambda p: p_start.sqrDist(p))
-                            new_part.extend(segment_points)
-
-                        new_part.append(p_end)
-                    part = new_part
-
-                # Split segment if it passes through a split point
-                segments = []
-                current_segment = [part[0]]
-
-                for i in range(1, len(part)):
-                    p = part[i]
-                    p_key = (round(p.x(), 4), round(p.y(), 4))
-                    current_segment.append(p)
-
-                    if p_key in split_points and i < len(part) - 1:
-                        segments.append(current_segment)
-                        current_segment = [p]
-
-                segments.append(current_segment)
-
-                for seg_i, segment in enumerate(segments):
-                    if len(segment) < 2:
-                        continue
-
-                    u = (round(segment[0].x(), 4), round(segment[0].y(), 4))
-                    v = (round(segment[-1].x(), 4), round(segment[-1].y(), 4))
-                    edge_id = (feat.id(), idx, seg_i)
-                    edges[edge_id] = {
-                        "points": segment,
-                        "attrs": attrs,
-                        "u": u,
-                        "v": v,
-                        "fid": feat.id(),
-                    }
-
-        node_to_edges: dict[tuple, list[tuple[int, int, int]]] = {}
-        for eid, data in edges.items():
-            node_to_edges.setdefault(data["u"], []).append(eid)
-            node_to_edges.setdefault(data["v"], []).append(eid)
-
-        # 3. Traverse and Merge
-        merged_features: list[QgsFeature] = []
-        visited_edges: set[tuple[int, int, int]] = set()
-
-        for eid in edges:
-            if eid in visited_edges:
-                continue
-
-            path_edges = [eid]
-            visited_edges.add(eid)
-            current_attrs = edges[eid]["attrs"]
-
-            # Grow Forward (from v)
-            curr_node = edges[eid]["v"]
-            while True:
-                if curr_node in split_points:
-                    break
-
-                candidates = node_to_edges.get(curr_node, [])
-                valid_next = [
-                    c
-                    for c in candidates
-                    if c != path_edges[-1]
-                    and c not in visited_edges
-                    and edges[c]["attrs"] == current_attrs
-                ]
-
-                if len(valid_next) == 1:
-                    next_eid = valid_next[0]
-                    path_edges.append(next_eid)
-                    visited_edges.add(next_eid)
-                    e_data = edges[next_eid]
-                    curr_node = e_data["v"] if e_data["u"] == curr_node else e_data["u"]
-                else:
-                    break
-
-            # Grow Backward (from u)
-            curr_node = edges[eid]["u"]
-            while True:
-                if curr_node in split_points:
-                    break
-
-                candidates = node_to_edges.get(curr_node, [])
-                valid_prev = [
-                    c
-                    for c in candidates
-                    if c != path_edges[0]
-                    and c not in visited_edges
-                    and edges[c]["attrs"] == current_attrs
-                ]
-
-                if len(valid_prev) == 1:
-                    prev_eid = valid_prev[0]
-                    path_edges.insert(0, prev_eid)
-                    visited_edges.add(prev_eid)
-                    e_data = edges[prev_eid]
-                    curr_node = e_data["u"] if e_data["v"] == curr_node else e_data["v"]
-                else:
-                    break
-
-            # Construct Geometry
-            e0 = edges[path_edges[0]]
-            pts = e0["points"]
-
-            if len(path_edges) > 1:
-                e1 = edges[path_edges[1]]
-                p_end = e0["v"]
-                if p_end == e1["u"] or p_end == e1["v"]:
-                    current_pts = list(pts)
-                    last_node = p_end
-                else:
-                    current_pts = list(reversed(pts))
-                    last_node = e0["u"]
-            else:
-                current_pts = list(pts)
-                last_node = e0["v"]
-
-            full_points = list(current_pts)
-
-            for i in range(1, len(path_edges)):
-                next_e = edges[path_edges[i]]
-                next_pts = next_e["points"]
-
-                if next_e["u"] == last_node:
-                    full_points.extend(next_pts[1:])
-                    last_node = next_e["v"]
-                elif next_e["v"] == last_node:
-                    full_points.extend(list(reversed(next_pts))[1:])
-                    last_node = next_e["u"]
-
-            new_feat = QgsFeature(target_fields)
-            new_feat.setGeometry(QgsGeometry.fromPolylineXY(full_points))
-
-            first_fid = edges[path_edges[0]]["fid"]
-            source_feat = features_map[first_fid]
-
-            new_feat.setAttribute(
-                NewLineLayerFields.org_id.field_name,
-                source_feat.attribute("original_fid"),
-            )
-            if dim_field:
-                new_feat.setAttribute(
-                    NewLineLayerFields.dim.field_name, source_feat.attribute(dim_field)
-                )
-            if load_field:
-                new_feat.setAttribute(
-                    NewLineLayerFields.load.field_name,
-                    source_feat.attribute(load_field),
-                )
-
-            new_feat.setAttribute(
-                NewLineLayerFields.length.field_name, new_feat.geometry().length()
-            )
-            new_feat.setAttribute(
-                NewLineLayerFields.type.field_name, PipeType.MAIN.translated
-            )
-
-            merged_features.append(new_feat)
-
-        log_debug(
-            f"Merged {len(edges)} segments into {len(merged_features)} features.",
-            Qgis.Success,
-        )
-        return merged_features
-
     def create_point_layer(self) -> QgsVectorLayer:
         """Create an empty point layer in the project's GeoPackage.
 
@@ -678,54 +290,22 @@ class LayerManager:
             The newly created QgsVectorLayer.
         """
         log_debug("Creating new layer in GeoPackage...")
-
-        gpkg_path: Path = PluginContext.project_gpkg()
         base_name: str = self.fix_layer_name(self.selected_layer.name())
-        new_layer_name: str = f"{base_name}{Names.new_fittings_layer_suffix}"
-
-        if existing_layers := self.project.mapLayersByName(new_layer_name):
-            self.project.removeMapLayers([layer.id() for layer in existing_layers])
-
-        empty_layer = QgsVectorLayer(
-            f"Point?crs={self.project.crs().authid()}", "in_memory_layer", "memory"
-        )
-
-        data_provider: QgsVectorDataProvider | None = empty_layer.dataProvider()
-        if data_provider is None:
-            raise_runtime_error(
-                f"Could not get data provider for layer: {empty_layer.name()}"
-            )
-
         fields_to_add: list[QgsField] = [
             QgsField(field_enum.field_name, field_enum.data_type)
             for field_enum in NewPointLayerFields
         ]
-        data_provider.addAttributes(fields_to_add)
-        empty_layer.updateFields()
 
-        self._write_layer_to_gpkg(empty_layer, gpkg_path, new_layer_name)
-        log_debug(
-            f"Empty layer '{new_layer_name}' created in GeoPackage.",
-            Qgis.Success,
+        empty_layer = self._create_memory_layer(
+            "in_memory_layer", "Point", fields_to_add
         )
-
-        # Construct the layer URI and create a QgsVectorLayer
-        uri: str = f"{gpkg_path!s}|layername={new_layer_name}"
-        gpkg_layer = QgsVectorLayer(uri, new_layer_name, "ogr")
-
-        if not gpkg_layer.isValid():
-            raise_runtime_error(
-                f"Could not find layer '{new_layer_name}' in GeoPackage '{gpkg_path}'"
-            )
-
-        # Add the layer to the project registry first, but not the layer tree
-        self.project.addMapLayer(gpkg_layer, addToLegend=False)
-        # Then, insert it at the top of the group
-        group: QgsLayerTreeGroup = self._get_or_create_group()
-        group.insertLayer(0, gpkg_layer)
+        gpkg_layer = self._save_to_gpkg_and_load(
+            empty_layer, base_name, Names.new_fittings_layer_suffix
+        )
+        self._get_or_create_group().insertLayer(0, gpkg_layer)
 
         log_debug(
-            f"Added layer '{gpkg_layer.name()}' from GeoPackage to the project.",
+            f"Created point layer '{gpkg_layer.name()}' in GeoPackage.",
             Qgis.Success,
         )
         self.set_point_layer_style(gpkg_layer)
@@ -743,29 +323,14 @@ class LayerManager:
              The newly created QgsVectorLayer.
         """
         log_debug("Creating clean pipe layer copy in GeoPackage...")
-        gpkg_path: Path = PluginContext.project_gpkg()
         base_name: str = self.fix_layer_name(self.selected_layer.name())
-        new_layer_name: str = f"{base_name}{Names.new_pipe_layer_suffix}"
-
-        if existing_layers := self.project.mapLayersByName(new_layer_name):
-            self.project.removeMapLayers([layer.id() for layer in existing_layers])
-
-        # 1. Create a temporary in-memory layer with the desired structure
-        temp_pipe_layer = QgsVectorLayer(
-            f"LineString?crs={self.project.crs().authid()}",
-            "temp_pipe_layer",
-            "memory",
-        )
-        data_provider: QgsVectorDataProvider | None = temp_pipe_layer.dataProvider()
-        if data_provider is None:
-            raise_runtime_error("Could not create data provider for temp pipe layer.")
-
         fields_to_add: list[QgsField] = [
             QgsField(field_enum.field_name, field_enum.data_type)
             for field_enum in NewLineLayerFields
         ]
-        data_provider.addAttributes(fields_to_add)
-        temp_pipe_layer.updateFields()
+        temp_pipe_layer = self._create_memory_layer(
+            "temp_pipe_layer", "LineString", fields_to_add
+        )
 
         # 2. Find source field names for dimensions and load
         found_fields: FieldNames = VectorAnalysisTools.find_layer_fields(
@@ -775,7 +340,8 @@ class LayerManager:
         load_field_name: str | None = found_fields.load
 
         # 3. Populate the temporary layer with features and mapped attributes
-        new_features: list[QgsFeature] = self._create_merged_line_features(
+        merger = LineMerger(self.new_point_layer)
+        new_features: list[QgsFeature] = merger.create_merged_line_features(
             self.selected_layer,
             temp_pipe_layer.fields(),
             dim_field_name,
@@ -786,11 +352,61 @@ class LayerManager:
         temp_pipe_layer.addFeatures(new_features)
         temp_pipe_layer.commitChanges()
 
-        # 4. Write the temporary layer to the GeoPackage
-        self._write_layer_to_gpkg(temp_pipe_layer, gpkg_path, new_layer_name)
+        gpkg_layer = self._save_to_gpkg_and_load(
+            temp_pipe_layer, base_name, Names.new_pipe_layer_suffix
+        )
+        self._get_or_create_group().insertLayer(1, gpkg_layer)
 
-        # 5. Load the new layer from the GeoPackage and add to project
-        uri: str = f"{gpkg_path!s}|layername={new_layer_name}"
+        log_debug(
+            f"Created pipe layer copy '{gpkg_layer.name()}' in GeoPackage.",
+            Qgis.Success,
+        )
+        self.set_line_layer_style(gpkg_layer)
+
+        return gpkg_layer
+
+    def _create_memory_layer(
+        self, name: str, geometry_type: str, fields: list[QgsField]
+    ) -> QgsVectorLayer:
+        """Create an in-memory layer with the specified fields."""
+        uri = f"{geometry_type}?crs={self.project.crs().authid()}"
+        layer = QgsVectorLayer(uri, name, "memory")
+        if dp := layer.dataProvider():
+            dp.addAttributes(fields)
+            layer.updateFields()
+        return layer
+
+    def _save_to_gpkg_and_load(
+        self, memory_layer: QgsVectorLayer, base_name: str, suffix: str
+    ) -> QgsVectorLayer:
+        """Save a memory layer to the project GPKG and load it back."""
+        gpkg_path = PluginContext.project_gpkg()
+        new_layer_name = f"{base_name}{suffix}"
+
+        if existing := self.project.mapLayersByName(new_layer_name):
+            self.project.removeMapLayers([l.id() for l in existing])
+
+        options = QgsVectorFileWriter.SaveVectorOptions()
+        options.driverName = "GPKG"
+        options.layerName = new_layer_name
+        if gpkg_path.exists():
+            options.actionOnExistingFile = QgsVectorFileWriter.CreateOrOverwriteLayer
+        else:
+            options.actionOnExistingFile = QgsVectorFileWriter.CreateOrOverwriteFile
+
+        error: tuple = QgsVectorFileWriter.writeAsVectorFormatV3(
+            memory_layer,
+            str(gpkg_path),
+            self.project.transformContext(),
+            options,
+        )
+        if error[0] != QgsVectorFileWriter.WriterError.NoError:
+            raise_runtime_error(
+                f"Failed to create layer '{new_layer_name}' in '{gpkg_path}'. "
+                f"Error: {error[1]}"
+            )
+
+        uri = f"{gpkg_path}|layername={new_layer_name}"
         gpkg_layer = QgsVectorLayer(uri, new_layer_name, "ogr")
 
         if not gpkg_layer.isValid():
@@ -799,53 +415,7 @@ class LayerManager:
             )
 
         self.project.addMapLayer(gpkg_layer, addToLegend=False)
-        group: QgsLayerTreeGroup = self._get_or_create_group()
-        group.insertLayer(1, gpkg_layer)
-
-        log_debug(
-            f"Created pipe layer copy '{gpkg_layer.name()}' in GeoPackage.",
-            Qgis.Success,
-        )
-
-        self.set_line_layer_style(gpkg_layer)
-
         return gpkg_layer
-
-    def _write_layer_to_gpkg(
-        self,
-        layer_to_write: QgsVectorLayer,
-        gpkg_path: "Path",
-        layer_name: str,
-    ) -> None:
-        """Write a vector layer to a GeoPackage file.
-
-        Args:
-            layer_to_write: The layer to write.
-            gpkg_path: The path to the output GeoPackage file.
-            layer_name: The name of the layer within the GeoPackage.
-
-        Raises:
-            CustomRuntimeError: If writing the layer fails.
-        """
-        options = QgsVectorFileWriter.SaveVectorOptions()
-        options.driverName = "GPKG"
-        options.layerName = layer_name
-        if gpkg_path.exists():
-            options.actionOnExistingFile = QgsVectorFileWriter.CreateOrOverwriteLayer
-        else:
-            options.actionOnExistingFile = QgsVectorFileWriter.CreateOrOverwriteFile
-
-        error: tuple = QgsVectorFileWriter.writeAsVectorFormatV3(
-            layer_to_write,
-            str(gpkg_path),
-            self.project.transformContext(),
-            options,
-        )
-        if error[0] != QgsVectorFileWriter.WriterError.NoError:
-            raise_runtime_error(
-                f"Failed to create layer '{layer_name}' in '{gpkg_path}'. "
-                f"Error: {error[1]}"
-            )
 
     def create_temporary_point_layer(self) -> QgsVectorLayer:
         """Create a temporary in-memory point layer with the standard result fields.
@@ -1031,8 +601,8 @@ class LayerManager:
 
                 renderer.updateColorRamp(source_ramp)
 
-            if self.iface.layerTreeView():
-                self.iface.layerTreeView().refreshLayerSymbology(layer.id())
+            if layer_tree := self.iface.layerTreeView():
+                layer_tree.refreshLayerSymbology(layer.id())
 
         layer.triggerRepaint()
         log_debug("Line layer style set.", Qgis.Success)
