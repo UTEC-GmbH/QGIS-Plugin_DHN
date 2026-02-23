@@ -1,3 +1,22 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+markers = ["qgis: marks tests that require a QGIS environment"]
+
+[tool.coverage.run]
+source = ["modules"]
+omit = ["tests/*"]
+
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = [
+    "S101",  # Allow `assert` statements in tests
+    "D",     # Disable all pydocstyle rules for tests
+    "SLF001",# Allow access to private members in tests
+]
+
 [tool.mypy]
 
 [[tool.mypy.overrides]]
