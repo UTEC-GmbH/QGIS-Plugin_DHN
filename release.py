@@ -57,10 +57,10 @@ class PluginMetadata(TypedDict):
     changelog: str
     description: str
     qgis_minimum_version: str
+    qgis_maximum_version: str
     author: str
     email: str
     url_base: str
-    supports_qt6: str
 
 
 class ReleaseScriptError(Exception):
@@ -99,10 +99,10 @@ def get_plugin_metadata() -> PluginMetadata:
             "changelog": config.get("general", "changelog"),
             "description": config.get("general", "description"),
             "qgis_minimum_version": config.get("general", "qgisMinimumVersion"),
+            "qgis_maximum_version": config.get("general", "qgisMaximumVersion"),
             "author": config.get("general", "author"),
             "email": config.get("general", "email"),
             "url_base": config.get("general", "download_url_base"),
-            "supports_qt6": config.get("general", "supportsQt6"),
         }
     except configparser.NoSectionError as e:
         msg = f"Could not find required section '[{e.section}]' in {metadata_path}."
@@ -242,11 +242,11 @@ def _find_or_create_plugin_node(root: Element, plugin_name: str) -> Element:
             "changelog",
             "description",
             "qgis_minimum_version",
+            "qgis_maximum_version",
             "author_name",
             "email",
             "file_name",
             "download_url",
-            "supports_qt6",
         ]:
             SubElement(plugin_node, tag)
     else:
@@ -287,9 +287,11 @@ def _update_plugin_node_details(plugin_node: Element, metadata: PluginMetadata) 
     _update_xml_tag(
         plugin_node, "qgis_minimum_version", metadata["qgis_minimum_version"]
     )
+    _update_xml_tag(
+        plugin_node, "qgis_maximum_version", metadata["qgis_maximum_version"]
+    )
     _update_xml_tag(plugin_node, "author_name", metadata["author"])
     _update_xml_tag(plugin_node, "email", metadata["email"])
-    _update_xml_tag(plugin_node, "supports_qt6", metadata["supports_qt6"])
 
     clean_plugin_name: str = plugin_name.replace(" ", "_")
     new_zip_filename: str = f"{clean_plugin_name}.zip"
@@ -394,10 +396,12 @@ def _get_clean_metadata_content(plugin_name: str) -> str:
         original_content: str = f.read()
 
     lines: list[str] = original_content.splitlines(keepends=True)
-    new_lines: list[str] = [
-        f"name={plugin_name}\n" if line.strip().startswith("name=") else line
-        for line in lines
-    ]
+    new_lines: list[str] = []
+    for line in lines:
+        if "=" in line and line.split("=", 1)[0].strip() == "name":
+            new_lines.append(f"name = {plugin_name}\n")
+        else:
+            new_lines.append(line)
     return "".join(new_lines)
 
 
@@ -458,8 +462,16 @@ def _add_directories_to_zip(
             for file in files:
                 if any(file.endswith(ext) for ext in excluded_extensions):
                     continue
+
                 file_path: Path = Path(root) / file
-                arcname: str = (Path(plugin_zip_dir) / file_path).as_posix()
+                path_to_archive: Path = file_path
+
+                # If walking the main package dir, make path relative to avoid
+                # double-nesting (e.g., MyPlugin/MyPlugin/init.py).
+                if dir_path.name == plugin_zip_dir:
+                    path_to_archive = file_path.relative_to(dir_path)
+
+                arcname: str = (Path(plugin_zip_dir) / path_to_archive).as_posix()
                 zipf.write(file_path, arcname)
 
 
@@ -483,13 +495,12 @@ def package_plugin(metadata: PluginMetadata) -> None:
 
     # 1. Define packaging configuration
     plugin_zip_dir: str = metadata["plugin_package_name"]
-    files_to_zip: list[str] = metadata["files_to_package"]
-    dirs_to_zip: list[str] = metadata["dirs_to_package"]
 
     # Validate that the hardcoded name matches the metadata.
     if plugin_zip_dir != clean_plugin_name:
         msg: str = (
-            f"Name mismatch: The hardcoded 'plugin_zip_dir' ('{plugin_zip_dir}') "
+            "Name mismatch: The 'plugin_package_name' in metadata.txt "
+            f"('{plugin_zip_dir}') "
             f"must match the 'name' from 'metadata.txt' with spaces replaced "
             f"by underscores ('{clean_plugin_name}')."
         )
@@ -507,13 +518,13 @@ def package_plugin(metadata: PluginMetadata) -> None:
     ) as zipf:
         _add_files_to_zip(
             zipf,
-            files_to_zip,
+            metadata["files_to_package"],
             plugin_zip_dir,
             clean_metadata_content,
         )
         _add_directories_to_zip(
             zipf,
-            dirs_to_zip,
+            metadata["dirs_to_package"],
             plugin_zip_dir,
             metadata["excluded_dirs"],
             metadata["excluded_extensions"],

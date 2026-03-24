@@ -6,6 +6,8 @@ Notes:
     Open Command Prompt as an Administrator.
     Create the symbolic link using the "mklink /D" command. 
     The format is: mklink /D <Link_Path> <Target_Path>
+    where "Link_Path" is the path to the plugin folder in the QGIS profile of choice (e.g. default)
+    and "Target_Path" is the path to the folder where the development of the plugin takes place (Git repo)
 
     mklink /D "C:\Users\**USER_NAME**\AppData\Roaming\QGIS\QGIS**X**\profiles\default\python\plugins\**PLUGIN_NAME**_dev" "C:\**DEV_DIRECTORY**\**PLUGIN_NAME**"
 
