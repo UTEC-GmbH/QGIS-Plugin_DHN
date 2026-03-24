@@ -19,10 +19,37 @@ from .logs_and_errors import log_debug, raise_runtime_error
 
 @dataclass
 class DuplicateCheckResult:
-    """Holds the results of a duplicate feature check."""
+    """Holds the results of a duplicate feature check.
+
+    Attributes:
+        to_delete: A list of feature IDs identified for deletion.
+        removed_by_type: A dictionary mapping feature types to the count of
+            removed features of that type.
+    """
 
     to_delete: list[int]
     removed_by_type: dict[str, int]
+
+
+@dataclass(frozen=True)
+class FeatureKey:
+    """Unique key for identifying duplicate features.
+
+    Attributes:
+        x: The x-coordinate of the feature.
+        y: The y-coordinate of the feature.
+        feature_type: The type of the feature.
+        dim_1: The first dimension of the feature.
+        angle: The angle of the feature.
+        connected: The connected pipes string.
+    """
+
+    x: float
+    y: float
+    feature_type: str | None
+    dim_1: int | str
+    angle: int | None
+    connected: str
 
 
 class DuplicateFilter:
@@ -38,6 +65,9 @@ class DuplicateFilter:
 
         Args:
             layer: The layer to process for duplicates.
+
+        Raises:
+            CustomRuntimeError: If editing cannot be started or committed.
         """
         log_debug("Starting duplicate check on the final layer...")
 
@@ -58,23 +88,23 @@ class DuplicateFilter:
         """
         to_delete: list[int] = []
         removed_by_type: dict[str, int] = {}
-        seen: dict[tuple, int] = {}
+        seen: dict[FeatureKey, int] = {}
 
-        request = QgsFeatureRequest()
+        request: QgsFeatureRequest = QgsFeatureRequest()
         for feature in layer.getFeatures(request):  # pyright: ignore[reportGeneralTypeIssues]
-            key: tuple | None = self._build_feature_key(feature)
-            if key is None:
+            if not (key := self._build_feature_key(feature)):
                 continue
 
             if key in seen:
                 original_fid: int = seen[key]
                 log_debug(
-                    f"Duplicate feature found: {key[2]} (fid {feature.id()}). "
+                    f"Duplicate feature found: {key.feature_type} "
+                    f"(fid {feature.id()}). "
                     f"Keeping original feature (fid {original_fid}).",
                     icon="🐑",
                 )
                 to_delete.append(feature.id())
-                feature_type = str(key[2])
+                feature_type = str(key.feature_type)
                 removed_by_type[feature_type] = removed_by_type.get(feature_type, 0) + 1
             else:
                 seen[key] = feature.id()
@@ -82,26 +112,26 @@ class DuplicateFilter:
             to_delete=to_delete, removed_by_type=removed_by_type
         )
 
-    def _build_feature_key(self, feature: QgsFeature) -> tuple | None:
+    def _build_feature_key(self, feature: QgsFeature) -> FeatureKey | None:
         """Build a unique key for a feature to detect duplicates.
 
         Args:
             feature: The feature to build a key for.
 
         Returns:
-            A tuple representing the feature's key, or None if geometry is invalid.
+            A FeatureKey representing the feature's key, or None if geometry is invalid.
         """
         feature_geometry: QgsGeometry = feature.geometry()
         if feature_geometry is None or feature_geometry.isEmpty():
             return None
 
-        return (
-            round(feature_geometry.asPoint().x(), 4),
-            round(feature_geometry.asPoint().y(), 4),
-            feature.attribute(NewPointLayerFields.type.field_name),
-            feature.attribute(NewPointLayerFields.dim_1.field_name) or "",
-            feature.attribute(NewPointLayerFields.angle.field_name) or None,
-            feature.attribute(NewPointLayerFields.connected.field_name) or "",
+        return FeatureKey(
+            x=round(feature_geometry.asPoint().x(), 4),
+            y=round(feature_geometry.asPoint().y(), 4),
+            feature_type=feature.attribute(NewPointLayerFields.type.field_name),
+            dim_1=feature.attribute(NewPointLayerFields.dim_1.field_name) or "",
+            angle=feature.attribute(NewPointLayerFields.angle.field_name) or None,
+            connected=feature.attribute(NewPointLayerFields.connected.field_name) or "",
         )
 
     def _delete_features_from_layer(
@@ -112,6 +142,9 @@ class DuplicateFilter:
         Args:
             layer: The layer to delete features from.
             fids_to_delete: A list of feature IDs to delete.
+
+        Raises:
+            CustomRuntimeError: If starting editing or committing changes fails.
         """
         if not fids_to_delete:
             return

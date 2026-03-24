@@ -18,7 +18,12 @@ from .logs_and_errors import log_debug
 
 
 class PipeAnalysisResult(NamedTuple):
-    """Represents the result of pipe analysis at a T-intersection."""
+    """Represents the result of pipe analysis at a T-intersection.
+
+    Attributes:
+        main_pipe: A list of two features forming the main pipe.
+        connecting_pipe: The feature representing the connecting pipe.
+    """
 
     main_pipe: list[QgsFeature]
     connecting_pipe: QgsFeature
@@ -30,7 +35,7 @@ class TIntersectionAnalyzer(FeatureCreator):
     def process_t_intersection(
         self, point: QgsPointXY, features: list[QgsFeature]
     ) -> int:
-        """Analyzes a 3-way intersection and creates appropriate features.
+        """Analyze a 3-way intersection and create appropriate features.
 
         This method identifies the main and connecting pipes, checks for bends
         and dimension changes, and creates T-pieces, bends, and reducers
@@ -117,7 +122,7 @@ class TIntersectionAnalyzer(FeatureCreator):
         p_before: QgsPointXY,
         p_after: QgsPointXY,
     ) -> int:
-        """Analyzes a T-intersection derived from splitting a single main pipe.
+        """Analyze a T-intersection derived from splitting a single main pipe.
 
         This is used for "pseudo" T-intersections where one line terminates on
         the segment of another.
@@ -311,7 +316,7 @@ class TIntersectionAnalyzer(FeatureCreator):
         main_pipe: list[QgsFeature],
         connecting_pipe: QgsFeature,
     ) -> int:
-        """Check for dimension changes and creates a reducer if necessary.
+        """Check for dimension changes and create reducers if necessary.
 
         This method handles two scenarios:
         1. A dimension change within the main pipe.

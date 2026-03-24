@@ -3,6 +3,8 @@
 This module contains the LineMerger class for merging line features.
 """
 
+from typing import NamedTuple
+
 from qgis.core import (
     Qgis,
     QgsFeature,
@@ -20,7 +22,103 @@ from .constants import (
     Numbers,
     PipeType,
 )
+from .graph_definitions import Node
 from .logs_and_errors import log_debug
+from .vector_analysis_tools import FieldNames
+
+
+class EdgeID(NamedTuple):
+    """Unique identifier for a graph edge.
+
+    Attributes:
+        fid: The feature ID of the original line feature.
+        part_idx: The index of the geometry part (for multi-geometries).
+        seg_idx: The index of the segment within the part.
+    """
+
+    fid: int
+    part_idx: int
+    seg_idx: int
+
+
+class GraphEdge(NamedTuple):
+    """Represents a graph edge with its identifier and data.
+
+    Attributes:
+        id: The unique identifier for the edge.
+        points: The list of QgsPointXY defining the edge geometry.
+        start_node: The starting Node of the edge.
+        end_node: The ending Node of the edge.
+    """
+
+    id: EdgeID
+    points: list[QgsPointXY]
+    start_node: Node
+    end_node: Node
+
+
+class GraphContext(NamedTuple):
+    """Holds graph context for line merging.
+
+    Attributes:
+        edges: A dictionary mapping EdgeIDs to GraphEdges.
+        node_to_edges: A dictionary mapping Nodes to a list of connected GraphEdges.
+        split_points: A set of Nodes representing split points (e.g., T-pieces).
+    """
+
+    edges: dict[EdgeID, GraphEdge]
+    node_to_edges: dict[Node, list[GraphEdge]]
+    split_points: set[Node]
+
+
+class SplitPointData(NamedTuple):
+    """Holds data related to split points.
+
+    Attributes:
+        coords: A set of Node objects representing the coordinates of split points.
+        geoms: A dictionary mapping feature IDs to their QgsPointXY geometries.
+        spatial_index: A QgsSpatialIndex containing the split point features.
+    """
+
+    coords: set[Node]
+    geoms: dict[int, QgsPointXY]
+    spatial_index: QgsSpatialIndex
+
+
+class GraphStructure(NamedTuple):
+    """Holds the structural components of the graph.
+
+    Attributes:
+        edges: A dictionary of all edges in the graph.
+        features_map: A dictionary mapping feature IDs to original QgsFeatures.
+        node_to_edges: A dictionary mapping nodes to connected edges.
+    """
+
+    edges: dict[EdgeID, GraphEdge]
+    features_map: dict[int, QgsFeature]
+    node_to_edges: dict[Node, list[GraphEdge]]
+
+
+class PathResult(NamedTuple):
+    """Result of a path growing operation.
+
+    Attributes:
+        edges: A list of GraphEdges forming the path.
+        end_node: The Node where the path ends.
+    """
+
+    edges: list[GraphEdge]
+    end_node: Node
+
+
+class MergedPath(NamedTuple):
+    """Represents a merged path of connected edges.
+
+    Attributes:
+        edge_ids: A list of GraphEdges that make up the merged path.
+    """
+
+    edge_ids: list[GraphEdge]
 
 
 class LineMerger:
@@ -30,131 +128,132 @@ class LineMerger:
         """Initialize the LineMerger.
 
         Args:
-            point_layer: The point layer containing split points (T-pieces, etc.).
+            point_layer: The point layer containing split points (T-pieces, etc.)
+                used to break lines. Can be None.
         """
-        self.point_layer = point_layer
+        self.point_layer: QgsVectorLayer | None = point_layer
 
     def create_merged_line_features(
         self,
         source_layer: QgsVectorLayer,
         target_fields: QgsFields,
-        dim_field: str | None,
-        load_field: str | None,
+        source_fields: FieldNames,
     ) -> list[QgsFeature]:
         """Create merged line features from the source layer.
 
-        Merges connected lines with same attributes between split nodes.
+        Merges connected lines with the same attributes between split nodes.
+        It first builds a graph where lines are split at 'split points' (like T-pieces),
+        then traces paths of connected segments that don't branch, and merges them
+        into single features.
 
         Args:
-            source_layer: The source line layer.
-            target_fields: The fields for the new features.
-            dim_field: The name of the dimension field in the source layer.
-            load_field: The name of the load field in the source layer.
+            source_layer: The source line layer to process.
+            target_fields: The fields definition for the new merged features.
+            source_fields: A NamedTuple containing the names of the source fields
+                (dimension, load) to preserve/check during merging.
 
         Returns:
             A list of merged QgsFeature objects.
         """
         # 1. Collect points that will act as network splits (e.g., T-pieces)
-        split_points, split_point_geoms, sp_index = self._collect_split_points()
+        split_data: SplitPointData = self._collect_split_points()
 
         # 2. Build a graph representation of the line network, splitting lines
         #    at the collected split points.
-        edges, features_map, node_to_edges = self._build_graph(
+        graph_struct: GraphStructure = self._build_graph(
             source_layer,
-            dim_field,
-            load_field,
-            split_points,
-            split_point_geoms,
-            sp_index,
+            split_data.coords,
+            split_data.geoms,
+            split_data.spatial_index,
         )
 
         # 3. Traverse the graph to find paths of connected edges that can be merged.
-        merged_paths = self._find_merged_paths(edges, node_to_edges, split_points)
+        context = GraphContext(
+            graph_struct.edges, graph_struct.node_to_edges, split_data.coords
+        )
+        merged_paths: list[MergedPath] = self._find_merged_paths(context)
 
         # 4. Construct a new feature for each merged path.
         merged_features: list[QgsFeature] = [
             self._construct_merged_feature(
-                path, edges, features_map, target_fields, dim_field, load_field
+                path,
+                graph_struct.features_map,
+                target_fields,
+                source_fields,
             )
             for path in merged_paths
         ]
 
         log_debug(
-            f"Merged {len(edges)} segments into {len(merged_features)} features.",
+            f"Merged {len(graph_struct.edges)} segments into "
+            f"{len(merged_features)} features.",
             Qgis.Success,
         )
         return merged_features
 
     def _collect_split_points(
         self,
-    ) -> tuple[set[tuple[float, float]], dict[int, QgsPointXY], QgsSpatialIndex]:
+    ) -> SplitPointData:
         """Collect points that should split lines from the point layer.
 
         Returns:
-            A tuple containing:
-            - A set of rounded (x, y) coordinates for fast lookups.
-            - A dictionary mapping feature ID to QgsPointXY geometry.
-            - A spatial index of the split point features.
+            A SplitPointData object containing split points, geometries, and the
+            spatial index.
         """
-        split_points: set[tuple[float, float]] = set()
+        split_points: set[Node] = set()
         split_point_geoms: dict[int, QgsPointXY] = {}
         sp_index = QgsSpatialIndex()
 
         if not self.point_layer:
-            return split_points, split_point_geoms, sp_index
+            return SplitPointData(split_points, split_point_geoms, sp_index)
 
-        type_idx = self.point_layer.fields().lookupField(
+        type_idx: int = self.point_layer.fields().lookupField(
             NewPointLayerFields.type.field_name
         )
-        split_types = {
+        split_types: set[str] = {
             FittingType.T_PIECE.translated,
             FittingType.HOUSE_CONN.translated,
         }
-        for feat in self.point_layer.getFeatures():
-            if feat.attribute(type_idx) in split_types:
-                if geom := feat.geometry():
-                    p = geom.asPoint()
-                    split_points.add((round(p.x(), 4), round(p.y(), 4)))
-                    split_point_geoms[feat.id()] = p
-                    sp_index.addFeature(feat)
+        for feature in self.point_layer.getFeatures():
+            if (feature.attribute(type_idx) in split_types) and (
+                geom := feature.geometry()
+            ):
+                point = geom.asPoint()
+                split_points.add(Node(round(point.x(), 4), round(point.y(), 4)))
+                split_point_geoms[feature.id()] = point
+                sp_index.addFeature(feature)
 
-        return split_points, split_point_geoms, sp_index
+        return SplitPointData(split_points, split_point_geoms, sp_index)
 
     def _build_graph(
         self,
         source_layer: QgsVectorLayer,
-        dim_field: str | None,
-        load_field: str | None,
-        split_points: set[tuple[float, float]],
+        split_points: set[Node],
         split_point_geoms: dict[int, QgsPointXY],
         sp_index: QgsSpatialIndex,
-    ) -> tuple[dict, dict, dict]:
+    ) -> GraphStructure:
         """Build a graph representation of the line network.
 
         The graph is composed of edges, which are segments of the original lines
         split at specified split points.
 
         Args:
-            source_layer: The source line layer.
-            dim_field: The name of the dimension field.
-            load_field: The name of the load field.
+            source_layer: The source line layer to process.
             split_points: A set of coordinates for points that break lines.
-            split_point_geoms: A map of feature ID to split point geometry.
-            sp_index: A spatial index of split points.
+            split_point_geoms: A map of point feature IDs to split point geometries.
+            sp_index: A spatial index containing the split points.
 
         Returns:
-            A tuple containing:
-            - edges: A dictionary mapping edge ID to edge data.
-            - features_map: A dictionary mapping original feature ID to feature.
-            - node_to_edges: A dictionary mapping node coordinates to edge IDs.
+            A GraphStructure object containing the edge dictionary, the feature map,
+            and the node-to-edge mapping.
         """
-        edges: dict[tuple[int, int, int], dict] = {}
+        edges: dict[EdgeID, GraphEdge] = {}
         features_map: dict[int, QgsFeature] = {
-            feat.id(): feat for feat in source_layer.getFeatures()
+            feature.id(): feature for feature in source_layer.getFeatures()
         }
 
-        for feat in features_map.values():
-            geom = feat.geometry()
+        for feature in features_map.values():
+            geom: QgsGeometry = feature.geometry()
             if not geom:
                 continue
 
@@ -162,301 +261,344 @@ class LineMerger:
                 geom.asMultiPolyline() if geom.isMultipart() else [geom.asPolyline()]
             )
 
-            attrs = (
-                feat.attribute(dim_field) if dim_field else None,
-                feat.attribute(load_field) if load_field else None,
-            )
-
-            for idx, part in enumerate(parts):
-                if len(part) < 2:
+            for idx, part_points in enumerate(parts):
+                if len(part_points) < 2:  # noqa: PLR2004
                     continue
 
                 # Inject points that lie on segments as new vertices
-                modified_part = self._inject_split_points_into_part(
-                    part, sp_index, split_point_geoms
+                modified_points: list[QgsPointXY] = self._inject_split_points_into_part(
+                    part_points, sp_index, split_point_geoms
                 )
 
                 # Split the part into segments at the split points
-                segments = self._split_part_at_points(modified_part, split_points)
+                segments: list[list[QgsPointXY]] = self._split_part_at_points(
+                    modified_points, split_points
+                )
 
-                for seg_i, segment in enumerate(segments):
-                    if len(segment) < 2:
+                for segment_index, segment in enumerate(segments):
+                    if len(segment) < 2:  # noqa: PLR2004
                         continue
 
-                    u_node = (round(segment[0].x(), 4), round(segment[0].y(), 4))
-                    v_node = (round(segment[-1].x(), 4), round(segment[-1].y(), 4))
-                    edge_id = (feat.id(), idx, seg_i)
-                    edges[edge_id] = {
-                        "points": segment,
-                        "attrs": attrs,
-                        "u": u_node,
-                        "v": v_node,
-                        "fid": feat.id(),
-                    }
+                    start_node = Node(
+                        x=round(segment[0].x(), 4), y=round(segment[0].y(), 4)
+                    )
+                    end_node = Node(
+                        x=round(segment[-1].x(), 4), y=round(segment[-1].y(), 4)
+                    )
+                    edge_id = EdgeID(feature.id(), idx, segment_index)
+                    edges[edge_id] = GraphEdge(edge_id, segment, start_node, end_node)
 
-        node_to_edges: dict[tuple, list[tuple[int, int, int]]] = {}
-        for eid, data in edges.items():
-            node_to_edges.setdefault(data["u"], []).append(eid)
-            node_to_edges.setdefault(data["v"], []).append(eid)
+        node_to_edges: dict[Node, list[GraphEdge]] = {}
+        for edge in edges.values():
+            node_to_edges.setdefault(edge.start_node, []).append(edge)
+            node_to_edges.setdefault(edge.end_node, []).append(edge)
 
-        return edges, features_map, node_to_edges
+        return GraphStructure(edges, features_map, node_to_edges)
 
     def _inject_split_points_into_part(
         self,
-        part: list[QgsPointXY],
+        part_points: list[QgsPointXY],
         sp_index: QgsSpatialIndex,
         split_point_geoms: dict[int, QgsPointXY],
     ) -> list[QgsPointXY]:
         """Inject split points that lie on a line part as new vertices.
 
         Args:
-            part: The original list of points defining the line part.
+            part_points: The original list of points defining the line geometry part.
             sp_index: The spatial index of split points.
-            split_point_geoms: A map of feature ID to split point geometry.
+            split_point_geoms: A map of point feature IDs to split point geometries.
 
         Returns:
             A new list of points for the part, with injected vertices.
         """
-        part_geom = QgsGeometry.fromPolylineXY(part)
-        candidate_ids = sp_index.intersects(part_geom.boundingBox())
-        points_on_part = []
-
-        for cid in candidate_ids:
-            pt = split_point_geoms[cid]
-            if part_geom.distance(QgsGeometry.fromPointXY(pt)) < Numbers.tiny_number:
-                points_on_part.append(pt)
+        part_geom: QgsGeometry = QgsGeometry.fromPolylineXY(part_points)
+        candidate_ids: list[int] = sp_index.intersects(part_geom.boundingBox())
+        points_on_part: list[QgsPointXY] = [
+            split_point
+            for candidate_id in candidate_ids
+            if (split_point := split_point_geoms[candidate_id])
+            and part_geom.distance(QgsGeometry.fromPointXY(split_point))
+            < Numbers.tiny_number
+        ]
 
         if not points_on_part:
-            return part
+            return part_points
 
-        new_part = [part[0]]
-        for i in range(len(part) - 1):
-            p_start = part[i]
-            p_end = part[i + 1]
+        new_part_points: list[QgsPointXY] = [part_points[0]]
+        for i in range(len(part_points) - 1):
+            point_start: QgsPointXY = part_points[i]
+            point_end: QgsPointXY = part_points[i + 1]
 
-            segment_points = []
-            seg_geom = QgsGeometry.fromPolylineXY([p_start, p_end])
+            seg_geom: QgsGeometry = QgsGeometry.fromPolylineXY([point_start, point_end])
 
-            segment_points.extend(
-                pt
-                for pt in points_on_part
-                if seg_geom.distance(QgsGeometry.fromPointXY(pt)) < Numbers.tiny_number
-                and (
-                    not pt.compare(p_start, Numbers.tiny_number)
-                    and not pt.compare(p_end, Numbers.tiny_number)
-                )
-            )
-            if segment_points:
-                segment_points.sort(key=p_start.sqrDist)
-                new_part.extend(segment_points)
+            if segment_points := [
+                split_point
+                for split_point in points_on_part
+                if seg_geom.distance(QgsGeometry.fromPointXY(split_point))
+                < Numbers.tiny_number
+                and not split_point.compare(point_start, Numbers.tiny_number)
+                and not split_point.compare(point_end, Numbers.tiny_number)
+            ]:
+                segment_points.sort(key=point_start.sqrDist)
+                new_part_points.extend(segment_points)
 
-            new_part.append(p_end)
-        return new_part
+            new_part_points.append(point_end)
+        return new_part_points
 
     def _split_part_at_points(
-        self, part: list[QgsPointXY], split_points: set[tuple[float, float]]
+        self, part_points: list[QgsPointXY], split_points: set[Node]
     ) -> list[list[QgsPointXY]]:
         """Split a line part into segments at the given split points.
 
         Args:
-            part: The list of points defining the line part.
-            split_points: A set of (x, y) tuples for split points.
+            part_points: The list of points defining the line geometry part.
+            split_points: A set of Node objects representing the split coordinates.
 
         Returns:
-            A list of segments, where each segment is a list of points.
+            A list of segments, where each segment is a list of QgsPointXY.
         """
-        segments = []
-        current_segment = [part[0]]
+        segments: list = []
+        current_segment: list[QgsPointXY] = [part_points[0]]
 
-        for i in range(1, len(part)):
-            p = part[i]
-            p_key = (round(p.x(), 4), round(p.y(), 4))
-            current_segment.append(p)
+        for i in range(1, len(part_points)):
+            point: QgsPointXY = part_points[i]
+            point_node = Node(round(point.x(), 4), round(point.y(), 4))
+            current_segment.append(point)
 
             # Split if the point is a split point, but not if it's the last point
-            if p_key in split_points and i < len(part) - 1:
+            if point_node in split_points and i < len(part_points) - 1:
                 segments.append(current_segment)
-                current_segment = [p]
+                current_segment = [point]
 
         segments.append(current_segment)
         return segments
 
     def _find_merged_paths(
         self,
-        edges: dict,
-        node_to_edges: dict,
-        split_points: set[tuple[float, float]],
-    ) -> list[list[tuple[int, int, int]]]:
+        context: GraphContext,
+    ) -> list[MergedPath]:
         """Traverse the graph to find and merge connected edges.
 
         Args:
-            edges: The graph's edge data.
-            node_to_edges: The graph's node-to-edge mapping.
-            split_points: A set of coordinates for points that break lines.
+            context: The GraphContext containing edges, nodes, and split points.
 
         Returns:
-            A list of paths, where each path is a list of edge IDs to be merged.
+            A list of MergedPath objects, where each path contains a list of edge IDs.
         """
-        merged_paths: list[list[tuple[int, int, int]]] = []
-        visited_edges: set[tuple[int, int, int]] = set()
+        merged_paths: list[MergedPath] = []
+        visited_edges: set[EdgeID] = set()
 
-        for eid, e_data in edges.items():
-            if eid in visited_edges:
+        for edge in context.edges.values():
+            if edge.id in visited_edges:
                 continue
 
-            visited_edges.add(eid)
-            # Grow forward from the 'v' node
-            forward_path, _ = self._grow_path(
-                e_data["v"], eid, visited_edges, edges, node_to_edges, split_points
+            visited_edges.add(edge.id)
+            # Grow forward from the end node
+            forward_res: PathResult = self._grow_path(
+                edge.end_node, edge, visited_edges, context
             )
 
-            # Grow backward from the 'u' node
-            backward_path, _ = self._grow_path(
-                e_data["u"], eid, visited_edges, edges, node_to_edges, split_points
+            # Grow backward from the start node
+            backward_res: PathResult = self._grow_path(
+                edge.start_node, edge, visited_edges, context
             )
 
             # Combine the paths: backward (reversed) + initial edge + forward
-            full_path = [*list(reversed(backward_path)), eid, *forward_path]
-            merged_paths.append(full_path)
+            full_path: list[GraphEdge] = [
+                *reversed(backward_res.edges),
+                edge,
+                *forward_res.edges,
+            ]
+            merged_paths.append(MergedPath(full_path))
 
         return merged_paths
 
     def _grow_path(
         self,
-        start_node: tuple[float, float],
-        start_edge: tuple[int, int, int],
-        visited_edges: set[tuple[int, int, int]],
-        edges: dict,
-        node_to_edges: dict,
-        split_points: set[tuple[float, float]],
-    ) -> tuple[list[tuple[int, int, int]], tuple[float, float]]:
+        start_node: Node,
+        start_edge: GraphEdge,
+        visited_edges: set[EdgeID],
+        context: GraphContext,
+    ) -> PathResult:
         """Extend a path of edges from a starting node.
 
         Args:
-            start_node: The node from which to start growing the path.
-            start_edge: The initial edge in the path.
+            start_node: The Node from which to start growing the path.
+            start_edge: The initial GraphEdge in the path.
             visited_edges: A set of already visited edge IDs.
-            edges: The graph's edge data.
-            node_to_edges: The graph's node-to-edge mapping.
-            split_points: A set of coordinates for points that break lines.
+            context: The GraphContext containing edges, nodes, and split points.
 
         Returns:
-            A tuple containing:
-            - A list of edge IDs forming the grown path.
-            - The final node reached at the end of the path.
+            A PathResult containing the list of path edges and the final Node.
         """
-        path = []
-        curr_node = start_node
-        current_attrs = edges[start_edge]["attrs"]
-        last_edge = start_edge
+        path: list[GraphEdge] = []
+        current_node: Node = start_node
+        last_edge_id: EdgeID = start_edge.id
 
-        while True:
-            if curr_node in split_points:
-                break
-
-            candidates = node_to_edges.get(curr_node, [])
-            valid_next = [
-                c
-                for c in candidates
-                if c != last_edge
-                and c not in visited_edges
-                and edges[c]["attrs"] == current_attrs
+        while current_node not in context.split_points:
+            candidates: list[GraphEdge] = context.node_to_edges.get(current_node, [])
+            valid_next: list[GraphEdge] = [
+                candidate
+                for candidate in candidates
+                if candidate.id != last_edge_id and candidate.id not in visited_edges
             ]
 
             if len(valid_next) == 1:
-                next_eid = valid_next[0]
-                path.append(next_eid)
-                visited_edges.add(next_eid)
-                e_data = edges[next_eid]
+                next_edge: GraphEdge = valid_next[0]
+                path.append(next_edge)
+                visited_edges.add(next_edge.id)
                 # Move to the other end of the new edge
-                curr_node = e_data["v"] if e_data["u"] == curr_node else e_data["u"]
-                last_edge = next_eid
+                current_node = (
+                    next_edge.end_node
+                    if next_edge.start_node == current_node
+                    else next_edge.start_node
+                )
+                last_edge_id = next_edge.id
             else:
                 break
-        return path, curr_node
+        return PathResult(path, current_node)
+
+    def _merge_geometries(self, path_edges: list[GraphEdge]) -> QgsGeometry:
+        """Merge geometries of connected edges into a single polyline.
+
+        Args:
+            path_edges: An ordered list of graph edges to merge.
+
+        Returns:
+            The merged geometry.
+        """
+        first_edge: GraphEdge = path_edges[0]
+        points: list[QgsPointXY] = first_edge.points
+
+        if len(path_edges) > 1:
+            second_edge: GraphEdge = path_edges[1]
+            end_node: Node = first_edge.end_node
+            # Check connectivity to determine orientation of first segment
+            if end_node in [second_edge.start_node, second_edge.end_node]:
+                full_points: list[QgsPointXY] = list(points)
+                last_node: Node = end_node
+            else:
+                full_points = list(reversed(points))
+                last_node: Node = first_edge.start_node
+        else:
+            full_points = list(points)
+            last_node = first_edge.end_node
+
+        for i in range(1, len(path_edges)):
+            next_edge: GraphEdge = path_edges[i]
+            next_points: list[QgsPointXY] = next_edge.points
+
+            if next_edge.start_node == last_node:
+                full_points.extend(next_points[1:])
+                last_node = next_edge.end_node
+            elif next_edge.end_node == last_node:
+                full_points.extend(next_points[-2::-1])
+                last_node = next_edge.start_node
+
+        return QgsGeometry.fromPolylineXY(full_points)
+
+    def _resolve_attributes_and_notes(
+        self,
+        path_edges: list[GraphEdge],
+        features_map: dict[int, QgsFeature],
+        source_fields: FieldNames,
+    ) -> tuple[dict[str, int | float], str]:
+        """Resolve attributes for the merged feature and generate notes.
+
+        Args:
+            path_edges: A list of edges in the merged path.
+            features_map: A dictionary mapping original feature IDs to features.
+            source_fields: The names of the source fields to check.
+
+        Returns:
+            A tuple containing a dictionary of attributes to set (dimension, load)
+            and a semicolon-separated string of notes.
+        """
+        dims: set = set()
+        loads: set = set()
+
+        for edge in path_edges:
+            feature: QgsFeature = features_map[edge.id.fid]
+            if (
+                source_fields.dim
+                and (value := feature.attribute(source_fields.dim)) is not None
+            ):
+                dims.add(value)
+            if (
+                source_fields.load
+                and (value := feature.attribute(source_fields.load)) is not None
+            ):
+                loads.add(value)
+
+        attributes: dict[str, int | float] = {}
+        notes: list[str] = []
+
+        if len(dims) == 1:
+            attributes[NewLineLayerFields.dim.field_name] = next(iter(dims))
+        elif len(dims) > 1:
+            sorted_dims: list = sorted(dims)
+            notes.append(f"Dimensions: {', '.join(map(str, sorted_dims))}")
+
+        if len(loads) == 1:
+            attributes[NewLineLayerFields.load.field_name] = next(iter(loads))
+        elif len(loads) > 1:
+            sorted_loads: list = sorted(loads)
+            notes.append(f"Loads: {', '.join(map(str, sorted_loads))}")
+
+        return attributes, "; ".join(notes)
 
     def _construct_merged_feature(
         self,
-        path_edges: list[tuple[int, int, int]],
-        edges: dict,
+        merged_path: MergedPath,
         features_map: dict[int, QgsFeature],
         target_fields: QgsFields,
-        dim_field: str | None,
-        load_field: str | None,
+        source_fields: FieldNames,
     ) -> QgsFeature:
         """Construct a single merged QgsFeature from a path of edges.
 
         Args:
-            path_edges: An ordered list of edge IDs to merge.
-            edges: The graph's edge data.
-            features_map: A map of original feature IDs to features.
-            target_fields: The fields for the new feature.
-            dim_field: The name of the dimension field.
-            load_field: The name of the load field.
+            merged_path: The MergedPath object containing an ordered list of edge IDs.
+            features_map: A map of original feature IDs to QgsFeature objects.
+            target_fields: The fields definition for the new feature.
+            source_fields: The names of the source fields to extract data from.
 
         Returns:
             The newly constructed and attributed QgsFeature.
         """
-        # 1. Determine initial point order and starting node for geometry construction
-        e0_data = edges[path_edges[0]]
-        pts = e0_data["points"]
+        path_edges: list[GraphEdge] = merged_path.edge_ids
 
-        if len(path_edges) > 1:
-            e1_data = edges[path_edges[1]]
-            # Assume the connection is at the 'v' end of the first edge
-            p_end = e0_data["v"]
-            if p_end == e1_data["u"] or p_end == e1_data["v"]:
-                # Assumption was correct
-                full_points = list(pts)
-                last_node = p_end
-            else:
-                # Connection must be at the 'u' end, so reverse points
-                full_points = list(reversed(pts))
-                last_node = e0_data["u"]
-        else:
-            # For a single-edge path, order doesn't matter for the geometry
-            full_points = list(pts)
-            last_node = e0_data["v"]  # Placeholder, not used further
+        # 1. Create feature and set geometry
+        new_feature = QgsFeature(target_fields)
+        new_feature.setGeometry(self._merge_geometries(path_edges))
 
-        # 2. Append points from subsequent edges
-        for i in range(1, len(path_edges)):
-            next_e_data = edges[path_edges[i]]
-            next_pts = next_e_data["points"]
+        # 2. Set attributes from the first original feature in the path
+        first_fid: int = path_edges[0].id.fid
+        source_feature: QgsFeature = features_map[first_fid]
 
-            if next_e_data["u"] == last_node:
-                full_points.extend(next_pts[1:])
-                last_node = next_e_data["v"]
-            elif next_e_data["v"] == last_node:
-                full_points.extend(list(reversed(next_pts))[1:])
-                last_node = next_e_data["u"]
-
-        # 3. Create feature and set geometry
-        new_feat = QgsFeature(target_fields)
-        new_feat.setGeometry(QgsGeometry.fromPolylineXY(full_points))
-
-        # 4. Set attributes from the first original feature in the path
-        first_fid = edges[path_edges[0]]["fid"]
-        source_feat = features_map[first_fid]
-
-        new_feat.setAttribute(
+        new_feature.setAttribute(
             NewLineLayerFields.org_id.field_name,
-            source_feat.attribute("original_fid"),
+            source_feature.attribute("original_fid"),
         )
-        if dim_field:
-            new_feat.setAttribute(
-                NewLineLayerFields.dim.field_name, source_feat.attribute(dim_field)
-            )
-        if load_field:
-            new_feat.setAttribute(
-                NewLineLayerFields.load.field_name,
-                source_feat.attribute(load_field),
-            )
 
-        new_feat.setAttribute(
-            NewLineLayerFields.length.field_name, new_feat.geometry().length()
+        # 3. Resolve unified attributes (dim, load) and notes
+        attributes_and_notes: tuple[dict[str, int | float], str] = (
+            self._resolve_attributes_and_notes(path_edges, features_map, source_fields)
         )
-        new_feat.setAttribute(
+        resolved_attributes: dict[str, int | float] = attributes_and_notes[0]
+        notes: str = attributes_and_notes[1]
+
+        for name, value in resolved_attributes.items():
+            new_feature.setAttribute(name, value)
+
+        if notes:
+            new_feature.setAttribute(NewLineLayerFields.notes.field_name, notes)
+
+        # 4. Set calculated attributes
+        new_feature.setAttribute(
+            NewLineLayerFields.length.field_name, new_feature.geometry().length()
+        )
+        new_feature.setAttribute(
             NewLineLayerFields.type.field_name, PipeType.MAIN.translated
         )
 
-        return new_feat
+        return new_feature

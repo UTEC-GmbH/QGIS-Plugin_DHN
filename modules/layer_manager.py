@@ -359,16 +359,13 @@ class LayerManager:
         found_fields: FieldNames = VectorAnalysisTools.find_layer_fields(
             self.selected_layer
         )
-        dim_field_name: str | None = found_fields.dim
-        load_field_name: str | None = found_fields.load
 
         # 3. Populate the temporary layer with features and mapped attributes
         merger = LineMerger(self.new_point_layer)
         new_features: list[QgsFeature] = merger.create_merged_line_features(
             self.selected_layer,
             temp_pipe_layer.fields(),
-            dim_field_name,
-            load_field_name,
+            found_fields,
         )
 
         temp_pipe_layer.startEditing()

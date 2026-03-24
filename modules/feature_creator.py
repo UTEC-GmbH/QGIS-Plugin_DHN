@@ -42,8 +42,9 @@ class FeatureCreator(VectorAnalysisTools):
         """Create a 'questionable' point feature.
 
         Args:
-            point: The location of the point.
-            features: Connected features. If None, they are found by searching.
+            point: The geometry point for the new feature.
+            features: A list of connected features. If None, intersecting
+                features are found by searching around the point.
             note: An optional note to add to the feature's attributes.
 
         Returns:
@@ -78,7 +79,8 @@ class FeatureCreator(VectorAnalysisTools):
 
         Args:
             point: The location of the house connection.
-            features: The list of connected features (should be one).
+            features: A list of connected features (expected to contain exactly
+                one feature).
 
         Returns:
             1 if the feature was created successfully, 0 otherwise.
@@ -108,8 +110,8 @@ class FeatureCreator(VectorAnalysisTools):
 
         Args:
             point: The location of the bend.
-            features: The list of connected features.
-            angle: The calculated angle of the bend.
+            features: A list of features connected at the bend.
+            angle: The deflection angle of the bend in degrees.
             note: An optional note to add to the feature's attributes.
 
         Returns:
@@ -144,8 +146,8 @@ class FeatureCreator(VectorAnalysisTools):
         Args:
             point: The geometry point for the T-piece.
             main_pipe: A list of the two features forming the main pipe.
-            connecting_pipe: The feature for the connecting pipe.
-            note: A note to add to the feature's attributes.
+            connecting_pipe: The feature representing the connecting pipe.
+            note: The text for the note attribute.
 
         Returns:
             1 if the feature was created successfully, 0 otherwise.
@@ -187,11 +189,12 @@ class FeatureCreator(VectorAnalysisTools):
         at appropriate distances from the intersection point.
 
         Args:
-            point: The intersection point.
+            point: The point where the dimension change occurs.
             dim_main_1: Dimension of the first main pipe feature.
             dim_main_2: Dimension of the second main pipe feature.
             main_pipe: The two features forming the main pipe.
-            distance: The distance between the intersection and the first reducer.
+            distance: The distance from the point to place the first reducer.
+                Defaults to Numbers.distance_t_reducer.
 
         Returns:
             The number of reducer features created.

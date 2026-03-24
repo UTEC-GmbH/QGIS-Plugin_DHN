@@ -26,7 +26,12 @@ if TYPE_CHECKING:
 
 
 class FieldNames(NamedTuple):
-    """Holds the names of special fields found in the layer."""
+    """Holds the names of special fields found in the layer.
+
+    Attributes:
+        dim: The name of the dimension field, or None if not found.
+        load: The name of the load field, or None if not found.
+    """
 
     dim: str | None
     load: str | None
@@ -40,7 +45,7 @@ class VectorAnalysisTools:
         selected_layer: QgsVectorLayer,
         temp_point_layer: QgsVectorLayer,
     ) -> None:
-        """Initialize the VectorAnalysisTools class.
+        """Initialize the toolset with the selected and target layers.
 
         Args:
             selected_layer: The QgsVectorLayer to search within.
@@ -122,7 +127,11 @@ class VectorAnalysisTools:
         return self.new_layer.addFeature(new_feature)
 
     def get_connected_attributes(self, connected_features: list[QgsFeature]) -> dict:
-        """Get attributes from connected features.
+        """Extract attributes from connected features.
+
+        Constructs a dictionary containing a string representation of connected
+        original IDs and, if available, the dimensions found in the connected
+        features.
 
         Args:
             connected_features: A list of features connected to the point.
@@ -130,16 +139,16 @@ class VectorAnalysisTools:
         Returns:
             A dictionary of attributes derived from the connected features.
         """
-        attributes: dict = {}
 
         # Get connected feature IDs (line objects)
         connected_ids: list[int] = sorted(
             {feature.attribute("original_fid") for feature in connected_features}
         )
-        attributes[NewPointLayerFields.connected.field_name] = Names.separator.join(
-            str(id_int) or "???" for id_int in connected_ids
-        )
-
+        attributes: dict = {
+            NewPointLayerFields.connected.field_name: Names.separator.join(
+                str(id_int) or "???" for id_int in connected_ids
+            )
+        }
         # Get dimension values if the dimension field was found
         if self.dim_field_name and (
             dims := sorted(
@@ -158,7 +167,9 @@ class VectorAnalysisTools:
         return attributes
 
     def get_intersecting_features(self, search_geom: QgsGeometry) -> list[QgsFeature]:
-        """Get intersecting features for a given geometry.
+        """Find intersecting features for a given geometry.
+
+        Uses the spatial index of the selected layer to quickly find candidates.
 
         Args:
             search_geom: The geometry to search for intersections with.
@@ -178,13 +189,16 @@ class VectorAnalysisTools:
 
     @staticmethod
     def get_start_end_of_line(feature: QgsFeature) -> list[QgsPointXY]:
-        """Get the start and end points of a line feature.
+        """Get the start and end points of a line feature's geometry.
+
+        For MultiLineStrings, this returns the start and end points of every
+        part.
 
         Args:
             feature: The line feature.
 
         Returns:
-            A list containing the start and end points (QgsPointXY).
+            A list containing the start and end points (QgsPointXY) of all parts.
         """
         points: list = []
         geom: QgsGeometry = feature.geometry()
@@ -210,9 +224,9 @@ class VectorAnalysisTools:
         This function calculates the angle of deflection at point `p2`, which
         connects segments `p1-p2` and `p2-p3`.
 
-        - A straight line (p1-p2-p3 are collinear) will return 0°.
-        - A 90-degree turn will return 90°.
-        - A U-turn (p1 and p3 are at the same location) will return 180°.
+        * A straight line (p1-p2-p3 are collinear) will return 0°.
+        * A 90-degree turn will return 90°.
+        * A U-turn (p1 and p3 are at the same location) will return 180°.
 
         Args:
             p1: The start point of the first segment.
@@ -246,10 +260,11 @@ class VectorAnalysisTools:
     def get_adjacent_vertices(
         self, point: QgsPointXY, feature: QgsFeature
     ) -> tuple[QgsPointXY | None, QgsPointXY | None]:
-        """Get vertices adjacent to a point on a feature's geometry.
+        """Find vertices adjacent to a point on a feature's geometry.
 
         Finds the vertex on the feature that matches the input point and returns
-        the vertices immediately before and after it.
+        the vertices immediately before and after it. Returns None for both
+        if the point is an endpoint or not a vertex.
 
         Args:
             point: The vertex on the feature.
@@ -286,7 +301,7 @@ class VectorAnalysisTools:
     def get_adjacent_points_on_segment(
         self, point: QgsPointXY, feature: QgsFeature
     ) -> tuple[QgsPointXY | None, QgsPointXY | None]:
-        """Get vertices of the segment a point lies on.
+        """Find the start and end vertices of the segment a point lies on.
 
         Finds the segment of the feature's geometry that is closest to the
         input point and returns the start and end vertices of that segment.
@@ -379,10 +394,14 @@ class VectorAnalysisTools:
     def get_point_along_line(
         self, start_point: QgsPointXY, feature: QgsFeature, distance: float
     ) -> QgsPointXY | None:
-        """Get a point at a specific distance from the start point along a feature.
+        """Calculate a point at a specific distance from the start point.
+
+        This method projects a point from `start_point` towards the other end of
+        the feature's geometry. `start_point` is assumed to be one of the
+        feature's endpoints.
 
         Args:
-            start_point: The starting point on the line.
+            start_point: The starting point on the line (must be an endpoint).
             feature: The line feature.
             distance: The distance to move along the line.
 

@@ -1,6 +1,7 @@
-"""Module: find_stuff.py
+"""Module: poi_classifier.py
 
-This module contains the FeatureFinder class that finds things in the selected layer.
+This module contains the PointOfInterestClassifier class that finds and classifies
+features in the selected layer.
 """
 
 from collections.abc import Callable
@@ -28,7 +29,7 @@ class PointOfInterestClassifier(FeatureCreator):
     def __init__(
         self, selected_layer: QgsVectorLayer, temp_point_layer: QgsVectorLayer
     ) -> None:
-        """Initialize the FeatureFinder class.
+        """Initialize the PointOfInterestClassifier.
 
         Args:
             selected_layer: The QgsVectorLayer to search within.
@@ -44,6 +45,10 @@ class PointOfInterestClassifier(FeatureCreator):
         pgb_update_text: Callable[[str], None],
     ) -> int:
         """Find and classify points of interest.
+
+        Orchestrates the collection of points (vertices and intersections) and
+        processes them to create corresponding features (fittings, questionable points)
+        in the new layer.
 
         Args:
             progress_bar: A QProgressBar to report progress.
@@ -234,7 +239,8 @@ class PointOfInterestClassifier(FeatureCreator):
         """Process a point where one or two lines meet, potentially forming a bend.
 
         This method handles bends within a single feature (an intermediate vertex)
-        and bends formed by the intersection of two features.
+        and bends formed by the intersection of two features. It also checks for
+        dimension changes and creates reducers if necessary.
 
         Args:
             point: The point of interest (intersection or vertex).
@@ -282,12 +288,15 @@ class PointOfInterestClassifier(FeatureCreator):
     def _possible_house_connection(self, point: QgsPointXY, feature: QgsFeature) -> int:
         """Process a point that is the endpoint of a single line.
 
+        Checks if the feature is a valid house connection (connected to the network
+        at its other end) or an unconnected 'floating' line.
+
         Args:
             point: The endpoint coordinate.
             feature: The feature ending at this point.
 
         Returns:
-            The number of features created (1 if successful, 0 otherwise).
+            The number of features created.
         """
         # Check if it's a lone line segment or a true house connection
         is_other_end_connected = False
