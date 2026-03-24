@@ -16,14 +16,15 @@ from qgis.core import (
     QgsCoordinateTransform,
     QgsExpressionContextUtils,
     QgsFeature,
+    QgsFeatureRenderer,
     QgsField,
+    QgsFields,
     QgsLayerTree,
     QgsLayerTreeGroup,
     QgsLayerTreeNode,
     QgsProject,
     QgsRandomColorRamp,
     QgsRendererCategory,
-    QgsVectorDataProvider,
     QgsVectorFileWriter,
     QgsVectorLayer,
     QgsWkbTypes,
@@ -70,7 +71,14 @@ class LayerManager:
 
     @property
     def selected_layer(self) -> QgsVectorLayer:
-        """The selected layer in the plugin."""
+        """Get the selected layer in the plugin.
+
+        Returns:
+            The selected QgsVectorLayer.
+
+        Raises:
+            CustomRuntimeError: If the selected layer has not been set or initialized.
+        """
         if self._selected_layer is None:
             self.initialize_selected_layer()
         if self._selected_layer is None:
@@ -87,7 +95,14 @@ class LayerManager:
 
     @property
     def new_point_layer(self) -> QgsVectorLayer:
-        """The new layer created by the plugin."""
+        """Get the new point layer created by the plugin.
+
+        Returns:
+            The new point QgsVectorLayer.
+
+        Raises:
+            CustomRuntimeError: If the new point layer has not been set or initialized.
+        """
         if self._new_point_layer is None:
             self.initialize_new_layer()
         if self._new_point_layer is None:
@@ -104,7 +119,14 @@ class LayerManager:
 
     @property
     def new_line_layer(self) -> QgsVectorLayer:
-        """The new pipe layer created by the plugin."""
+        """Get the new pipe layer created by the plugin.
+
+        Returns:
+            The new pipe QgsVectorLayer.
+
+        Raises:
+            CustomRuntimeError: If the new pipe layer has not been set or initialized.
+        """
         if self._new_line_layer is None:
             self.initialize_new_pipe_layer()
         if self._new_line_layer is None:
@@ -188,29 +210,30 @@ class LayerManager:
         layer.removeSelection()
 
         # Create memory layer
-        uri = f"{QgsWkbTypes.displayString(layer.wkbType())}?crs={target_crs.authid()}"
+        uri: str = (
+            f"{QgsWkbTypes.displayString(layer.wkbType())}?crs={target_crs.authid()}"
+        )
         reprojected_layer = QgsVectorLayer(uri, layer.name(), "memory")
-        dp = reprojected_layer.dataProvider()
-        if not dp:
+        if not (dp := reprojected_layer.dataProvider()):
             raise_runtime_error(
                 f"Could not get data provider for layer: {reprojected_layer.name()}"
             )
 
         # Add fields
-        fields = [
+        fields: list[QgsField] = [
             f
             for f in layer.fields()
             if f.type() not in PROBLEMATIC_FIELD_TYPES and f.name() != "fid"
         ]
-        dp.addAttributes(fields + [QgsField("original_fid", QMT_Int)])
+        dp.addAttributes([*fields, QgsField("original_fid", QMT_Int)])
         reprojected_layer.updateFields()
 
         # Reproject features
         transform = QgsCoordinateTransform(
             layer.crs(), target_crs, self.project.transformContext()
         )
-        new_features = []
-        target_fields = reprojected_layer.fields()
+        new_features: list[QgsFeature] = []
+        target_fields: QgsFields = reprojected_layer.fields()
 
         for feat in layer.getFeatures():
             new_feat = QgsFeature(target_fields)
@@ -296,10 +319,10 @@ class LayerManager:
             for field_enum in NewPointLayerFields
         ]
 
-        empty_layer = self._create_memory_layer(
+        empty_layer: QgsVectorLayer = self._create_memory_layer(
             "in_memory_layer", "Point", fields_to_add
         )
-        gpkg_layer = self._save_to_gpkg_and_load(
+        gpkg_layer: QgsVectorLayer = self._save_to_gpkg_and_load(
             empty_layer, base_name, Names.new_fittings_layer_suffix
         )
         self._get_or_create_group().insertLayer(0, gpkg_layer)
@@ -328,7 +351,7 @@ class LayerManager:
             QgsField(field_enum.field_name, field_enum.data_type)
             for field_enum in NewLineLayerFields
         ]
-        temp_pipe_layer = self._create_memory_layer(
+        temp_pipe_layer: QgsVectorLayer = self._create_memory_layer(
             "temp_pipe_layer", "LineString", fields_to_add
         )
 
@@ -352,7 +375,7 @@ class LayerManager:
         temp_pipe_layer.addFeatures(new_features)
         temp_pipe_layer.commitChanges()
 
-        gpkg_layer = self._save_to_gpkg_and_load(
+        gpkg_layer: QgsVectorLayer = self._save_to_gpkg_and_load(
             temp_pipe_layer, base_name, Names.new_pipe_layer_suffix
         )
         self._get_or_create_group().insertLayer(1, gpkg_layer)
@@ -368,8 +391,17 @@ class LayerManager:
     def _create_memory_layer(
         self, name: str, geometry_type: str, fields: list[QgsField]
     ) -> QgsVectorLayer:
-        """Create an in-memory layer with the specified fields."""
-        uri = f"{geometry_type}?crs={self.project.crs().authid()}"
+        """Create an in-memory layer with the specified fields.
+
+        Args:
+            name: The name of the layer.
+            geometry_type: The geometry type (e.g., 'Point', 'LineString').
+            fields: A list of QgsField objects to add to the layer.
+
+        Returns:
+            The created in-memory QgsVectorLayer.
+        """
+        uri: str = f"{geometry_type}?crs={self.project.crs().authid()}"
         layer = QgsVectorLayer(uri, name, "memory")
         if dp := layer.dataProvider():
             dp.addAttributes(fields)
@@ -379,12 +411,25 @@ class LayerManager:
     def _save_to_gpkg_and_load(
         self, memory_layer: QgsVectorLayer, base_name: str, suffix: str
     ) -> QgsVectorLayer:
-        """Save a memory layer to the project GPKG and load it back."""
-        gpkg_path = PluginContext.project_gpkg()
-        new_layer_name = f"{base_name}{suffix}"
+        """Save a memory layer to the project GPKG and load it back.
+
+        Args:
+            memory_layer: The in-memory layer to save.
+            base_name: The base name for the new layer.
+            suffix: The suffix to append to the layer name.
+
+        Returns:
+            The loaded QgsVectorLayer from the GeoPackage.
+
+        Raises:
+            CustomRuntimeError: If writing to the GeoPackage fails or the layer
+                cannot be loaded.
+        """
+        gpkg_path: Path = PluginContext.project_gpkg()
+        new_layer_name: str = f"{base_name}{suffix}"
 
         if existing := self.project.mapLayersByName(new_layer_name):
-            self.project.removeMapLayers([l.id() for l in existing])
+            self.project.removeMapLayers([layer.id() for layer in existing])
 
         options = QgsVectorFileWriter.SaveVectorOptions()
         options.driverName = "GPKG"
@@ -406,7 +451,7 @@ class LayerManager:
                 f"Error: {error[1]}"
             )
 
-        uri = f"{gpkg_path}|layername={new_layer_name}"
+        uri: str = f"{gpkg_path}|layername={new_layer_name}"
         gpkg_layer = QgsVectorLayer(uri, new_layer_name, "ogr")
 
         if not gpkg_layer.isValid():
@@ -428,15 +473,13 @@ class LayerManager:
             "temporary_point_layer",
             "memory",
         )
-        data_provider: QgsVectorDataProvider | None = temp_layer.dataProvider()
-        if data_provider is None:
+        if (data_provider := temp_layer.dataProvider()) is None:
             raise_runtime_error("Could not create data provider for temporary layer.")
 
-        fields_to_add: list[QgsField] = []
-        fields_to_add.extend(
+        fields_to_add: list[QgsField] = [
             QgsField(field_enum.field_name, field_enum.data_type)
             for field_enum in NewPointLayerFields
-        )
+        ]
         data_provider.addAttributes(fields_to_add)
 
         temp_layer.updateFields()
@@ -522,7 +565,7 @@ class LayerManager:
             new_feature.setGeometry(feature.geometry())
             for field in feature.fields():
                 # Copy attribute if a field with the same name exists in the target
-                idx = target_fields.indexOf(field.name())
+                idx: int = target_fields.indexOf(field.name())
                 if idx != -1:
                     new_feature.setAttribute(idx, feature.attribute(field.name()))
             target_layer.addFeature(new_feature)
@@ -571,7 +614,7 @@ class LayerManager:
 
         layer.loadNamedStyle(str(qml_path))
 
-        renderer = layer.renderer()
+        renderer: QgsFeatureRenderer | None = layer.renderer()
         if isinstance(renderer, QgsCategorizedSymbolRenderer):
             # Preserve the source symbol and color ramp from the QML style
             source_symbol = renderer.sourceSymbol()
