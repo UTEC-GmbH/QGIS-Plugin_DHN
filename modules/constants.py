@@ -44,16 +44,36 @@ class ClassProperty(Generic[T]):
     """A decorator that converts a method into a read-only class property."""
 
     def __init__(self, fget: Callable[[Any], T]) -> None:
-        """Initialize the class property."""
+        """Initialize the class property.
+
+        Args:
+            fget: The function to get the value.
+        """
         self.fget: Callable[[Any], T] = fget
 
     def __get__(self, instance: object | None, owner: type | None = None) -> T:
-        """Return the value of the property."""
+        """Return the value of the property.
+
+        Args:
+            instance: The instance accessing the property.
+            owner: The class owning the property.
+
+        Returns:
+            The value returned by the getter function.
+        """
         return self.fget(owner)
 
 
 def QT_TRANSLATE_NOOP(context: str, source: str) -> str:  # noqa: N802
-    """Mark a string for translation without translating it immediately."""
+    """Mark a string for translation without translating it immediately.
+
+    Args:
+        context: The translation context.
+        source: The string to translate.
+
+    Returns:
+        The source string.
+    """
     _: str = context
     return source
 
@@ -79,7 +99,7 @@ class Icons:
             light: The color to use for the light theme (default: "#738ad5").
 
         Returns:
-            QIcon: The loaded QIcon object.
+            The loaded QIcon object.
         """
         icons_path: Path = PluginContext.icons_path()
 
@@ -151,12 +171,12 @@ class FittingType(Enum):
     used in the attribute table.
     """
 
-    HOUSE_CONN: str = QT_TRANSLATE_NOOP("cont_FittingType", "House-Connection")
-    BEND: str = QT_TRANSLATE_NOOP("cont_FittingType", "Bend")
-    T_PIECE: str = QT_TRANSLATE_NOOP("cont_FittingType", "T-Piece")
-    CONNECTOR: str = QT_TRANSLATE_NOOP("cont_FittingType", "Connector")
-    REDUCER: str = QT_TRANSLATE_NOOP("cont_FittingType", "Reducer")
-    QUESTIONABLE: str = QT_TRANSLATE_NOOP("cont_FittingType", "Questionable")
+    HOUSE_CONN = QT_TRANSLATE_NOOP("cont_FittingType", "House-Connection")
+    BEND = QT_TRANSLATE_NOOP("cont_FittingType", "Bend")
+    T_PIECE = QT_TRANSLATE_NOOP("cont_FittingType", "T-Piece")
+    CONNECTOR = QT_TRANSLATE_NOOP("cont_FittingType", "Connector")
+    REDUCER = QT_TRANSLATE_NOOP("cont_FittingType", "Reducer")
+    QUESTIONABLE = QT_TRANSLATE_NOOP("cont_FittingType", "Questionable")
 
     @property
     def translated(self) -> str:
@@ -171,9 +191,9 @@ class PipeType(Enum):
     used in the attribute table.
     """
 
-    MAIN: str = QT_TRANSLATE_NOOP("cont_PipeType", "Main Pipe")
-    CONN: str = QT_TRANSLATE_NOOP("cont_PipeType", "Connecting Pipe")
-    FORK: str = QT_TRANSLATE_NOOP("cont_PipeType", "Main Pipe (Fork)")
+    MAIN = QT_TRANSLATE_NOOP("cont_PipeType", "Main Pipe")
+    CONN = QT_TRANSLATE_NOOP("cont_PipeType", "Connecting Pipe")
+    FORK = QT_TRANSLATE_NOOP("cont_PipeType", "Main Pipe (Fork)")
 
     @property
     def translated(self) -> str:
@@ -183,10 +203,7 @@ class PipeType(Enum):
 
 @dataclass(frozen=True)
 class PipeDimensions:
-    """Class: PipeDimensions
-
-    This class contains pipe dimensions.
-    """
+    """Defines standard pipe dimensions and reduction parameters."""
 
     max_dim_jump_reducer: int = 2
 
@@ -218,10 +235,7 @@ class PipeDimensions:
 
 @dataclass(frozen=True)
 class Colours:
-    """Class: Colours
-
-    This class contains colour constants.
-    """
+    """Defines hex color codes for different fitting types."""
 
     bend: str = "#e2b60a"
     house: str = "#55ddff"
@@ -232,10 +246,7 @@ class Colours:
 
 
 class Names:
-    """Class: Names
-
-    This class contains names.
-    """
+    """Contains string constants used for naming layers, files, and fields."""
 
     dim_prefix: str = "DN"
     separator: str = " / "
@@ -285,10 +296,7 @@ class Names:
 
 @dataclass(frozen=True)
 class Numbers:
-    """Class: Numbers
-
-    This class contains numeric constants used throughout the plugin.
-    """
+    """Contains numeric constants used for geometry analysis and layout."""
 
     circle_full: float = 360  # The number of degrees in a full circle.
     circle_semi: float = 180  # The number of degrees in a semi-circle.
@@ -318,41 +326,46 @@ class NewPointLayerFields(Enum):
     This Enum is directly iterable.
     """
 
-    type: tuple[str, Qmt] = (
+    type = (
         QT_TRANSLATE_NOOP("cont_PointLayerFields", "Type"),
         QMT_String,
     )
-    designation: tuple[str, Qmt] = (
+    designation = (
         QT_TRANSLATE_NOOP("cont_PointLayerFields", "Designation"),
         QMT_String,
     )
-    dim_1: tuple[str, Qmt] = (
+    dim_1 = (
         QT_TRANSLATE_NOOP("cont_PointLayerFields", "Diameter 1"),
         QMT_Int,
     )
-    dim_2: tuple[str, Qmt] = (
+    dim_2 = (
         QT_TRANSLATE_NOOP("cont_PointLayerFields", "Diameter 2"),
         QMT_Int,
     )
-    angle: tuple[str, Qmt] = (
+    angle = (
         QT_TRANSLATE_NOOP("cont_PointLayerFields", "Bend-Angle"),
         QMT_Int,
     )
-    load: tuple[str, Qmt] = (
+    load = (
         QT_TRANSLATE_NOOP("cont_PointLayerFields", "Load"),
         QMT_Double,
     )
-    connected: tuple[str, Qmt] = (
+    connected = (
         QT_TRANSLATE_NOOP("cont_PointLayerFields", "Connected Pipes"),
         QMT_String,
     )
-    notes: tuple[str, Qmt] = (
+    notes = (
         QT_TRANSLATE_NOOP("cont_PointLayerFields", "Notes"),
         QMT_String,
     )
 
     def __init__(self, display_name: str, q_type: Qmt) -> None:
-        """Initialize the enum member with its attributes."""
+        """Initialize the enum member.
+
+        Args:
+            display_name: The display name of the field.
+            q_type: The QMetaType of the field data.
+        """
         self._display_name: str = display_name
         self._q_type: Qmt = q_type
 
@@ -373,45 +386,50 @@ class NewLineLayerFields(Enum):
     This Enum is directly iterable.
     """
 
-    org_id: tuple[str, Qmt] = (
+    org_id = (
         QT_TRANSLATE_NOOP("cont_LineLayerFields", "Original ID"),
         QMT_Int,
     )
-    dim: tuple[str, Qmt] = (
+    dim = (
         QT_TRANSLATE_NOOP("cont_LineLayerFields", "Original Diameter"),
         QMT_Int,
     )
-    load: tuple[str, Qmt] = (
+    load = (
         QT_TRANSLATE_NOOP("cont_LineLayerFields", "Original Load"),
         QMT_Double,
     )
-    length: tuple[str, Qmt] = (
+    length = (
         QT_TRANSLATE_NOOP("cont_LineLayerFields", "Route length"),
         QMT_Double,
     )
-    type: tuple[str, Qmt] = (
+    type = (
         QT_TRANSLATE_NOOP("cont_LineLayerFields", "Type"),
         QMT_String,
     )
-    branch: tuple[str, Qmt] = (
+    branch = (
         QT_TRANSLATE_NOOP("cont_LineLayerFields", "Branch"),
         QMT_String,
     )
-    designation: tuple[str, Qmt] = (
+    designation = (
         QT_TRANSLATE_NOOP("cont_LineLayerFields", "Designation"),
         QMT_String,
     )
-    conn_buildings: tuple[str, Qmt] = (
+    conn_buildings = (
         QT_TRANSLATE_NOOP("cont_LineLayerFields", "Connected Buildings"),
         QMT_String,
     )
-    notes: tuple[str, Qmt] = (
+    notes = (
         QT_TRANSLATE_NOOP("cont_LineLayerFields", "Notes"),
         QMT_String,
     )
 
     def __init__(self, display_name: str, q_type: Qmt) -> None:
-        """Initialize the enum member with its attributes."""
+        """Initialize the enum member.
+
+        Args:
+            display_name: The display name of the field.
+            q_type: The QMetaType of the field data.
+        """
         self._display_name: str = display_name
         self._q_type: Qmt = q_type
 

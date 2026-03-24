@@ -39,6 +39,9 @@ class PointCollector:
     def _collect_vertices(self, features: list[QgsFeature]) -> list[QgsPointXY]:
         """Collect all unique vertices from a list of features.
 
+        This method uses `self.checked_points` to track processed coordinates
+        and prevent duplicates. It updates `self.checked_points` in place.
+
         Args:
             features: A list of features to process.
 
@@ -65,13 +68,18 @@ class PointCollector:
     def collect_points(self, progress_bar: QProgressBar) -> dict[str, list[QgsPointXY]]:
         """Collect all unique vertices and intersection points from the layer.
 
+        This method first collects all vertices, then iterates through features
+        to find intersections. Only intersections that are not existing vertices
+        (i.e., mid-segment intersections) are collected.
+
         Args:
             progress_bar: A progress bar to report progress.
 
         Returns:
-            A dictionary containing two lists of unique QgsPointXY points:
-            'vertices' for all feature vertices and 'intersections' for
-            true mid-segment intersections.
+            A dictionary containing two keys:
+            * 'vertices': A list of unique QgsPointXY points for feature vertices.
+            * 'intersections': A list of unique QgsPointXY points for true
+              mid-segment intersections.
         """
         features: list[QgsFeature] = list(self.layer.getFeatures())
         progress_bar.setMaximum(len(features))
@@ -122,12 +130,15 @@ class PointCollector:
     ) -> None:
         """Extract and add unique points from an intersection geometry.
 
-        Only adds points that are not vertices of the intersecting features.
+        This method appends found points to `points_list` if they are not
+        already in `self.checked_points` and are not vertices of the
+        intersecting features. It updates `self.checked_points` in place.
 
         Args:
-            intersection_geom: The geometry of the intersection.
-            points_list: The list to append found points to.
-            intersecting_features: The features involved in the intersection.
+            intersection_geom: The geometry resulting from the intersection.
+            points_list: The list to append new unique points to.
+            intersecting_features: The features involved in the intersection,
+                used to verify that points are not existing vertices.
         """
         points_to_add: list[QgsPointXY] = []
         wkb_type: Qgis.WkbType = intersection_geom.wkbType()
@@ -161,7 +172,8 @@ class PointCollector:
             tolerance: The distance tolerance for the check. Defaults to 1e-4.
 
         Returns:
-            True if the point is close to a vertex of any feature, False otherwise.
+            True if the point is within tolerance of a vertex of any feature,
+            False otherwise.
         """
         for feature in features:
             geom = feature.geometry()
