@@ -7,8 +7,14 @@ from collections.abc import Callable, Generator
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from qgis._core import QgsMapLayer
-from qgis.core import Qgis, QgsApplication, QgsLayerTreeNode, QgsProject, QgsVectorLayer
+from qgis.core import (
+    Qgis,
+    QgsApplication,
+    QgsLayerTreeNode,
+    QgsMapLayer,
+    QgsProject,
+    QgsVectorLayer,
+)
 from qgis.gui import QgisInterface, QgsLayerTreeView
 from qgis.PyQt.QtCore import QCoreApplication, QObject, QSettings, Qt, QTranslator
 from qgis.PyQt.QtGui import QIcon
@@ -28,6 +34,7 @@ from .modules.logs_and_errors import (
     CustomRuntimeError,
     CustomUserError,
     create_summary_message,
+    get_layer_type_counts,
     log_debug,
     raise_runtime_error,
     raise_user_error,
@@ -340,11 +347,13 @@ class DHN(QObject):
                 # --- Log and display result summary ---
                 self.layer_manager.set_point_layer_style(new_layer)
                 self.layer_manager.set_line_layer_style(pipe_layer_copy)
+
+                counts = get_layer_type_counts(new_layer)
                 summary_single_line: str = create_summary_message(
-                    new_layer, reprojected_layer.name(), multiline=False
+                    counts, reprojected_layer.name(), multiline=False
                 )
                 summary_multi_line: str = create_summary_message(
-                    new_layer, reprojected_layer.name(), multiline=True
+                    counts, reprojected_layer.name(), multiline=True
                 )
 
                 # --- Export results to XLSX for Excel ---
