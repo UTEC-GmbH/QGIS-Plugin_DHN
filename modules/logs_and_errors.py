@@ -150,8 +150,28 @@ def raise_user_error(error_msg: str) -> NoReturn:
     raise CustomUserError(error_msg)
 
 
+def get_layer_type_counts(layer: QgsVectorLayer) -> dict[str, int] | None:
+    """Count features by type in the layer.
+
+    Args:
+        layer: The layer to analyze.
+
+    Returns:
+        A dictionary of counts by type, or None if the type field is missing.
+    """
+    if layer.fields().indexFromName(NewPointLayerFields.type.field_name) == -1:
+        return None
+
+    type_counts: dict[str, int] = {}
+    for feature in layer.getFeatures():  # pyright: ignore[reportGeneralTypeIssues]
+        type_value = feature.attribute(NewPointLayerFields.type.field_name)
+        if isinstance(type_value, str) and type_value:
+            type_counts[type_value] = type_counts.get(type_value, 0) + 1
+    return type_counts
+
+
 def create_summary_message(
-    new_layer: QgsVectorLayer,
+    type_counts: dict[str, int] | None,
     selected_layer_name: str,
     *,
     multiline: bool = False,
@@ -159,7 +179,7 @@ def create_summary_message(
     """Create a summary message of the features found in the new layer.
 
     Args:
-        new_layer: The layer containing the new features.
+        type_counts: A dictionary of feature counts by type.
         selected_layer_name: The name of the selected layer.
         multiline: If True, format the summary as a multi-line string.
             Defaults to False.
@@ -173,7 +193,7 @@ def create_summary_message(
     excel_summary: str = QCoreApplication.translate("summary", "(Summary saved to folder '{0}')").format(Names.excel_dir)  
     # fmt: on
 
-    if new_layer.fields().indexFromName(NewPointLayerFields.type.field_name) == -1:
+    if type_counts is None:
         log_debug("Type field not found in new layer.", Qgis.Warning)
         # fmt: off
         fail_field: str = QCoreApplication.translate("summary", "Type field not found in new layer.") 
@@ -181,32 +201,23 @@ def create_summary_message(
         completed_message: str = (
             f"{base_message} ({LEVEL_ICON[Qgis.Warning]} {fail_field})"
         )
+    elif not type_counts:
+        log_debug("Failed to get type counts from new layer.", Qgis.Warning)
+        # fmt: off
+        fail_counts: str = QCoreApplication.translate("summary", "Failed to get type counts from new layer.")  
+        # fmt: on
+        completed_message = f"{base_message} ({LEVEL_ICON[Qgis.Warning]} {fail_counts})"
+
     else:
-        type_counts: dict[str, int] = {}
-        for feature in new_layer.getFeatures():  # pyright: ignore[reportGeneralTypeIssues]
-            type_value = feature.attribute(NewPointLayerFields.type.field_name)
-            if isinstance(type_value, str) and type_value:
-                type_counts[type_value] = type_counts.get(type_value, 0) + 1
-
-        if not type_counts:
-            log_debug("Failed to get type counts from new layer.", Qgis.Warning)
-            # fmt: off
-            fail_counts: str = QCoreApplication.translate("summary", "Failed to get type counts from new layer.")  
-            # fmt: on
-            completed_message = (
-                f"{base_message} ({LEVEL_ICON[Qgis.Warning]} {fail_counts})"
-            )
-
+        found_parts: list[str] = [
+            f"{name}: {count}" for name, count in type_counts.items()
+        ]
+        if multiline:
+            details: str = "\n- " + "\n- ".join(found_parts)
+            completed_message = f"{base_message}{details} {excel_summary}"
         else:
-            found_parts: list[str] = [
-                f"{name}: {count}" for name, count in type_counts.items()
-            ]
-            if multiline:
-                details: str = "\n- " + "\n- ".join(found_parts)
-                completed_message = f"{base_message}{details} {excel_summary}"
-            else:
-                completed_message = (
-                    f"{base_message} {' | '.join(found_parts)} {excel_summary}"
-                )
+            completed_message = (
+                f"{base_message} {' | '.join(found_parts)} {excel_summary}"
+            )
 
     return completed_message
