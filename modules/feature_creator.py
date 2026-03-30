@@ -93,7 +93,7 @@ class FeatureCreator(VectorAnalysisTools):
         # Get load value if the load field was found
         if self.load_field_name and len(features) == 1:
             feat: QgsFeature = features[0]
-            attrs[NewPointLayerFields.load.field_name] = feat.attribute(
+            attrs[NewPointLayerFields.load_heat.field_name] = feat.attribute(
                 self.load_field_name
             )
 
