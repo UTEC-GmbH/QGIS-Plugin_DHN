@@ -18,7 +18,7 @@ from qgis.core import (
     QgsWkbTypes,
 )
 
-from .constants import Names, NewPointLayerFields, Numbers
+from .constants import Names, NewPointLayerFields, Numbers, SourceFieldNames
 from .logs_and_errors import log_debug
 
 if TYPE_CHECKING:
@@ -30,11 +30,15 @@ class FieldNames(NamedTuple):
 
     Attributes:
         dim: The name of the dimension field, or None if not found.
-        load: The name of the load field, or None if not found.
+        load_heat: The name of the heating load field, or None if not found.
+        load_water: The name of the water load field, or None if not found.
+        load_total: The name of the total load field, or None if not found.
     """
 
     dim: str | None
-    load: str | None
+    load_heat: str | None
+    load_water: str | None
+    load_total: str | None
 
 
 class VectorAnalysisTools:
@@ -62,7 +66,9 @@ class VectorAnalysisTools:
 
         fields: FieldNames = self.find_layer_fields(selected_layer)
         self.dim_field_name: str | None = fields.dim
-        self.load_field_name: str | None = fields.load
+        self.load_heat_field_name: str | None = fields.load_heat
+        self.load_water_field_name: str | None = fields.load_water
+        self.load_total_field_name: str | None = fields.load_total
 
     @staticmethod
     def find_layer_fields(layer: QgsVectorLayer) -> FieldNames:
@@ -82,18 +88,23 @@ class VectorAnalysisTools:
                 None,
             )
 
-        dim_name: str | None = _find(Names.sel_layer_field_dim)
-        load_name: str | None = _find(Names.sel_layer_field_load)
+        dim_name: str | None = _find(SourceFieldNames.dimension)
+        load_heat_name: str | None = _find(SourceFieldNames.load_heat)
+        load_water_name: str | None = _find(SourceFieldNames.load_water)
+        load_total_name: str | None = _find(SourceFieldNames.load_total)
 
         if dim_name:
             log_debug(f"Found dimension field: '{dim_name}'", Qgis.Success)
         else:
             log_debug("No dimension field found in the selected layer.", Qgis.Warning)
 
-        if load_name:
-            log_debug(f"Found load field: '{load_name}'", Qgis.Success)
+        if load_heat_name:
+            log_debug(f"Found heating load field: '{load_heat_name}'", Qgis.Success)
 
-        return FieldNames(dim_name, load_name)
+        if load_water_name:
+            log_debug(f"Found water load field: '{load_water_name}'", Qgis.Success)
+
+        return FieldNames(dim_name, load_heat_name, load_water_name, load_total_name)
 
     def create_feature(self, geometry: QgsGeometry, attributes: dict) -> bool:
         """Create a new feature in the new layer.

@@ -121,6 +121,18 @@ class MergedPath(NamedTuple):
     edge_ids: list[GraphEdge]
 
 
+class ResolvedAttributes(NamedTuple):
+    """Attributes and notes resolved for a merged feature.
+
+    Attributes:
+        attributes: A dictionary of attribute names and their resolved values.
+        notes: A string containing descriptive notes about the merger.
+    """
+
+    attributes: dict[str, int | float]
+    notes: str
+
+
 class LineMerger:
     """A class to merge connected line features."""
 
@@ -502,58 +514,95 @@ class LineMerger:
         path_edges: list[GraphEdge],
         features_map: dict[int, QgsFeature],
         source_fields: FieldNames,
-    ) -> tuple[dict[str, int | float], str]:
+    ) -> ResolvedAttributes:
         """Resolve attributes for the merged feature and generate notes.
 
         Args:
             path_edges: A list of edges in the merged path.
             features_map: A dictionary mapping original feature IDs to features.
-            source_fields: The names of the source fields to check.
+            source_fields: The field names configuration for the source layer.
 
         Returns:
-            A tuple containing a dictionary of attributes to set (dimension, load)
-            and a semicolon-separated string of notes.
+            A ResolvedAttributes object containing the mapping and merged notes.
         """
-        dims: set = set()
-        loads: set = set()
-        original_ids: set = set()
-
-        for edge in path_edges:
-            feature: QgsFeature = features_map[edge.id.fid]
-            if (
-                source_fields.dim
-                and (value := feature.attribute(source_fields.dim)) is not None
-            ):
-                dims.add(value)
-            if (
-                source_fields.load
-                and (value := feature.attribute(source_fields.load)) is not None
-            ):
-                loads.add(value)
-
-            if (oid := feature.attribute("original_fid")) is not None:
-                original_ids.add(oid)
-
+        feature_list: list[QgsFeature] = [
+            features_map[edge.id.fid] for edge in path_edges
+        ]
         attributes: dict[str, int | float] = {}
         notes: list[str] = []
 
+        # 1. Handle original IDs for notes
+        original_ids: set = {
+            feature_id
+            for feature in feature_list
+            if (feature_id := feature.attribute("original_fid")) is not None
+        }
         if len(original_ids) > 1:
             sorted_ids: list = sorted(original_ids)
             notes.append(f"Merger of Original IDs: [{', '.join(map(str, sorted_ids))}]")
 
-        if len(dims) == 1:
-            attributes[NewLineLayerFields.dim.field_name] = next(iter(dims))
-        elif len(dims) > 1:
-            sorted_dims: list = sorted(dims)
-            notes.append(f"Dimensions: [{', '.join(map(str, sorted_dims))}]")
+        # 2. Handle mapped attributes (dimensions and loads)
+        field_configs: list[tuple[str | None, str, str]] = [
+            (source_fields.dim, NewLineLayerFields.dim.field_name, "Dimensions"),
+            (
+                source_fields.load_heat,
+                NewLineLayerFields.load_heat.field_name,
+                "Heating Loads",
+            ),
+            (
+                source_fields.load_water,
+                NewLineLayerFields.load_water.field_name,
+                "Water Loads",
+            ),
+            (
+                source_fields.load_total,
+                NewLineLayerFields.load_total.field_name,
+                "Total Loads",
+            ),
+        ]
 
-        if len(loads) == 1:
-            attributes[NewLineLayerFields.load.field_name] = next(iter(loads))
-        elif len(loads) > 1:
-            sorted_loads: list = sorted(loads)
-            notes.append(f"Loads: [{', '.join(map(str, sorted_loads))}]")
+        for source_field, target_field, label in field_configs:
+            if source_field is None:
+                continue
 
-        return attributes, "; ".join(notes)
+            values: set = {
+                val
+                for feature in feature_list
+                if (val := feature.attribute(source_field)) is not None
+            }
+            self._process_attribute_set(values, target_field, label, attributes, notes)
+
+        return ResolvedAttributes(attributes=attributes, notes="; ".join(notes))
+
+    def _process_attribute_set(
+        self,
+        values: set,
+        field_name: str,
+        note_label: str,
+        attributes: dict[str, int | float],
+        notes: list[str],
+    ) -> None:
+        """Process a set of feature values into attributes or notes.
+
+        If a single unique value is found, it is added to the attributes dictionary.
+        If multiple unique values are found, they are formatted into a note.
+
+        Args:
+            values: A set of unique values collected from features.
+            field_name: The target field name in the attribute table.
+            note_label: The label to use for the note if multiple values exist.
+            attributes: The dictionary to update with resolved attributes.
+            notes: The list of notes to update with conflicting values.
+        """
+        if not values:
+            return
+
+        if len(values) == 1:
+            attributes[field_name] = next(iter(values))
+            return
+
+        sorted_values: list = sorted(values)
+        notes.append(f"{note_label}: [{', '.join(map(str, sorted_values))}]")
 
     def _construct_merged_feature(
         self,
@@ -589,17 +638,17 @@ class LineMerger:
         )
 
         # 3. Resolve unified attributes (dim, load) and notes
-        attributes_and_notes: tuple[dict[str, int | float], str] = (
-            self._resolve_attributes_and_notes(path_edges, features_map, source_fields)
+        resolved: ResolvedAttributes = self._resolve_attributes_and_notes(
+            path_edges, features_map, source_fields
         )
-        resolved_attributes: dict[str, int | float] = attributes_and_notes[0]
-        notes: str = attributes_and_notes[1]
 
-        for name, value in resolved_attributes.items():
+        for name, value in resolved.attributes.items():
             new_feature.setAttribute(name, value)
 
-        if notes:
-            new_feature.setAttribute(NewLineLayerFields.notes.field_name, notes)
+        if resolved.notes:
+            new_feature.setAttribute(
+                NewLineLayerFields.notes.field_name, resolved.notes
+            )
 
         # 4. Set calculated attributes
         new_feature.setAttribute(

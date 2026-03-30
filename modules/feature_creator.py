@@ -90,12 +90,18 @@ class FeatureCreator(VectorAnalysisTools):
         }
         attrs |= self.get_connected_attributes(features)
 
-        # Get load value if the load field was found
-        if self.load_field_name and len(features) == 1:
-            feat: QgsFeature = features[0]
-            attrs[NewPointLayerFields.load_heat.field_name] = feat.attribute(
-                self.load_field_name
+        if len(features) != 1:
+            return (
+                1 if self.create_feature(QgsGeometry.fromPointXY(point), attrs) else 0
             )
+
+        feature: QgsFeature = features[0]
+        if (field := self.load_heat_field_name) is not None:
+            attrs[NewPointLayerFields.load_heat.field_name] = feature.attribute(field)
+        if (field := self.load_water_field_name) is not None:
+            attrs[NewPointLayerFields.load_water.field_name] = feature.attribute(field)
+        if (field := self.load_total_field_name) is not None:
+            attrs[NewPointLayerFields.load_total.field_name] = feature.attribute(field)
 
         return 1 if self.create_feature(QgsGeometry.fromPointXY(point), attrs) else 0
 

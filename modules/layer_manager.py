@@ -6,6 +6,7 @@ This module contains the LayerManager class.
 import contextlib
 import re
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -53,6 +54,19 @@ if TYPE_CHECKING:
     from qgis.gui import QgsLayerTreeView
 
 
+@dataclass(frozen=True)
+class SourceLayers:
+    """Holds a pair of related source layers for processing.
+
+    Attributes:
+        pipe: The mandatory line layer representing the pipe network.
+        building: The optional polygon layer representing buildings.
+    """
+
+    pipe: QgsVectorLayer
+    building: QgsVectorLayer | None
+
+
 class LayerManager:
     """A class to manage the layers used in the plugin."""
 
@@ -65,33 +79,40 @@ class LayerManager:
         """
         self.project: QgsProject = project
         self.iface: QgisInterface = iface
-        self._selected_layer: QgsVectorLayer | None = None
+        self._source_layers: SourceLayers | None = None
         self._new_point_layer: QgsVectorLayer | None = None
         self._new_line_layer: QgsVectorLayer | None = None
 
     @property
-    def selected_layer(self) -> QgsVectorLayer:
-        """Get the selected layer in the plugin.
+    def pipe_layer(self) -> QgsVectorLayer:
+        """Get the reprojected pipe (line) layer.
 
         Returns:
-            The selected QgsVectorLayer.
-
-        Raises:
-            CustomRuntimeError: If the selected layer has not been set or initialized.
+            The pipe QgsVectorLayer.
         """
-        if self._selected_layer is None:
-            self.initialize_selected_layer()
-        if self._selected_layer is None:
-            raise_runtime_error("Selected layer is not set.")
-        return self._selected_layer
+        if self._source_layers is None:
+            self.initialize_layers()
 
-    @selected_layer.setter
-    def selected_layer(self, layer: QgsVectorLayer) -> None:
-        self._selected_layer = layer
+        if (layers := self._source_layers) is None:
+            raise_runtime_error("Source layers could not be initialized.")
 
-    def initialize_selected_layer(self) -> None:
-        """Initialize the selected layer."""
-        self._selected_layer = self.get_selected_layer()
+        return layers.pipe
+
+    @property
+    def building_layer(self) -> QgsVectorLayer | None:
+        """Get the reprojected building (polygon) layer.
+
+        Returns:
+            The building QgsVectorLayer or None if not available.
+        """
+        if self._source_layers is None:
+            self.initialize_layers()
+
+        return None if (layers := self._source_layers) is None else layers.building
+
+    def initialize_layers(self) -> None:
+        """Initialize and reproject the selected pipe and building layers."""
+        self._source_layers = self._identify_and_reproject_layers()
 
     @property
     def new_point_layer(self) -> QgsVectorLayer:
@@ -219,11 +240,30 @@ class LayerManager:
                 f"Could not get data provider for layer: {reprojected_layer.name()}"
             )
 
+        # Determine the required field prefix based on geometry type
+        geom_type: QgsWkbTypes.GeometryType = layer.geometryType()
+        prefix: str = ""
+        if geom_type == QgsWkbTypes.LineGeometry:
+            prefix = "p_"
+        elif geom_type == QgsWkbTypes.PolygonGeometry:
+            prefix = "b_"
+
+        layer_fields: QgsFields = layer.fields()
+        # Only apply prefix filtering if the layer uses the p_/b_ convention
+        # to avoid stripping fields from standard layers.
+        use_filtering: bool = False
+        if prefix:
+            use_filtering = any(
+                field.name().startswith(("p_", "b_")) for field in layer_fields
+            )
+
         # Add fields
         fields: list[QgsField] = [
-            f
-            for f in layer.fields()
-            if f.type() not in PROBLEMATIC_FIELD_TYPES and f.name() != "fid"
+            field
+            for field in layer_fields
+            if field.type() not in PROBLEMATIC_FIELD_TYPES
+            and field.name() != "fid"
+            and (not use_filtering or field.name().startswith(prefix))
         ]
         dp.addAttributes([*fields, QgsField("original_fid", QMT_Int)])
         reprojected_layer.updateFields()
@@ -261,50 +301,112 @@ class LayerManager:
 
         return reprojected_layer
 
-    def get_selected_layer(self) -> QgsVectorLayer:
-        """Collect the selected layer in the QGIS layer tree view and reprojects it.
+    def _identify_and_reproject_layers(self) -> SourceLayers:
+        """Identify the pipe and building layers from the selection and tree.
 
         Returns:
-            The selected and reprojected QgsVectorLayer object.
+            A LayerPair containing the reprojected pipe and building layers.
 
         Raises:
-            CustomUserError: If no layer is selected, multiple layers are selected,
-                or the selected layer is not a line vector layer.
-            CustomRuntimeError: If the layer tree view cannot be accessed.
+            CustomUserError: If no valid selection is found or a pipe layer is missing.
         """
         layer_tree: QgsLayerTreeView | None = self.iface.layerTreeView()
         if not layer_tree:
             raise_runtime_error("Could not get layer tree view.")
 
         selected_nodes: list[QgsLayerTreeNode] = layer_tree.selectedNodes()
-        if len(selected_nodes) > 1:
-            # fmt: off
-            raise_user_error(QCoreApplication.translate("UserError", "Multiple layers selected."))  # noqa: E501
-            # fmt: on
         if not selected_nodes:
             # fmt: off
             raise_user_error(QCoreApplication.translate("UserError", "No layer selected."))  # noqa: E501
             # fmt: on
 
-        selected_node: QgsLayerTreeNode = next(iter(selected_nodes))
-        if not selected_node.layer():
-            # fmt: off
-            raise_user_error(QCoreApplication.translate("UserError", "Selected node is not a layer."))  # noqa: E501
-            # fmt: on
+        layers: list[QgsVectorLayer] = [
+            node.layer()
+            for node in selected_nodes
+            if isinstance(node.layer(), QgsVectorLayer)
+        ]
 
-        selected_layer = selected_node.layer()
-        if not isinstance(selected_layer, QgsVectorLayer):
-            # fmt: off
-            raise_user_error(QCoreApplication.translate("UserError", "Selected layer is not a vector layer."))  # noqa: E501
-            # fmt: on
+        pipe_raw: QgsVectorLayer | None = None
+        building_raw: QgsVectorLayer | None = None
 
-        if selected_layer.geometryType() != QgsWkbTypes.LineGeometry:
-            # fmt: off
-            raise_user_error(QCoreApplication.translate("UserError", "The selected layer is not a line layer."))  # noqa: E501
-            # fmt: on
+        # 1. Sort selected layers by geometry type
+        for layer in layers:
+            if layer.geometryType() == QgsWkbTypes.LineGeometry:
+                pipe_raw = layer
+            elif layer.geometryType() == QgsWkbTypes.PolygonGeometry:
+                building_raw = layer
 
-        # Reproject the layer to the project's CRS
-        return self.reproject_layer_to_project_crs(selected_layer)
+        # 2. If one is missing, try to find the companion by name
+        if pipe_raw and not building_raw:
+            building_raw = self._find_companion(pipe_raw, QgsWkbTypes.PolygonGeometry)
+        elif building_raw and not pipe_raw:
+            pipe_raw = self._find_companion(building_raw, QgsWkbTypes.LineGeometry)
+
+        # 3. Validation
+        if not pipe_raw:
+            # fmt: off
+            msg: str = QCoreApplication.translate("UserError", "A pipe (line) layer is required for the analysis.")  # noqa: E501
+            # fmt: on
+            raise_user_error(msg)
+
+        # 4. Reproject
+        pipe_reprojected: QgsVectorLayer = self.reproject_layer_to_project_crs(pipe_raw)
+        building_reprojected: QgsVectorLayer | None = (
+            self.reproject_layer_to_project_crs(building_raw) if building_raw else None
+        )
+
+        return SourceLayers(pipe=pipe_reprojected, building=building_reprojected)
+
+    def _find_companion(
+        self, base_layer: QgsVectorLayer, target_geom: QgsWkbTypes.GeometryType
+    ) -> QgsVectorLayer | None:
+        """Find a layer with the same name but different geometry in the project.
+
+        Args:
+            base_layer: The layer to find a companion for.
+            target_geom: The expected geometry type of the companion.
+
+        Returns:
+            The found QgsVectorLayer or None.
+        """
+        name: str = base_layer.name()
+        for layer in self.project.mapLayers().values():
+            if not isinstance(layer, QgsVectorLayer) or layer.id() == base_layer.id():
+                continue
+
+            if (
+                layer.name() == name
+                and layer.geometryType() == target_geom
+                and self._verify_companion_attributes(layer, target_geom)
+            ):
+                return layer
+
+        return None
+
+    def _verify_companion_attributes(
+        self, layer: QgsVectorLayer, target_geom: QgsWkbTypes.GeometryType
+    ) -> bool:
+        """Verify if the layer follows the b_ / p_ field prefix convention.
+
+        Args:
+            layer: The layer to check.
+            target_geom: The geometry type to decide which prefix to look for.
+
+        Returns:
+            True if the convention is detected, False otherwise.
+        """
+        field_names: list[str] = [f.name() for f in layer.fields()]
+        has_b: bool = any(n.startswith("b_") for n in field_names)
+        has_p: bool = any(n.startswith("p_") for n in field_names)
+
+        if not (has_b and has_p):
+            return True  # Fallback to name match if prefixes aren't used
+
+        # For polygons, b_ fields should have data, p_ should be NULL (heuristic check)
+        # We just check if the prefixes exist for now as requested.
+        if target_geom == QgsWkbTypes.PolygonGeometry:
+            return has_b
+        return has_p if target_geom == QgsWkbTypes.LineGeometry else True
 
     def create_point_layer(self) -> QgsVectorLayer:
         """Create an empty point layer in the project's GeoPackage.
@@ -313,7 +415,7 @@ class LayerManager:
             The newly created QgsVectorLayer.
         """
         log_debug("Creating new layer in GeoPackage...")
-        base_name: str = self.fix_layer_name(self.selected_layer.name())
+        base_name: str = self.fix_layer_name(self.pipe_layer.name())
         fields_to_add: list[QgsField] = [
             QgsField(field_enum.field_name, field_enum.data_type)
             for field_enum in NewPointLayerFields
@@ -336,17 +438,13 @@ class LayerManager:
         return gpkg_layer
 
     def create_line_layer(self) -> QgsVectorLayer:
-        """Create a copy of the selected layer to store pipe properties.
-
-        This creates a new line layer in the project's GeoPackage. The new layer
-        contains all geometries from the selected layer but has a cleaned-up
-        attribute table defined by the `NewLineLayerFields` enum.
+        """Create a copy of the pipe layer to store network properties.
 
         Returns:
              The newly created QgsVectorLayer.
         """
         log_debug("Creating clean pipe layer copy in GeoPackage...")
-        base_name: str = self.fix_layer_name(self.selected_layer.name())
+        base_name: str = self.fix_layer_name(self.pipe_layer.name())
         fields_to_add: list[QgsField] = [
             QgsField(field_enum.field_name, field_enum.data_type)
             for field_enum in NewLineLayerFields
@@ -357,13 +455,13 @@ class LayerManager:
 
         # 2. Find source field names for dimensions and load
         found_fields: FieldNames = VectorAnalysisTools.find_layer_fields(
-            self.selected_layer
+            self.pipe_layer
         )
 
         # 3. Populate the temporary layer with features and mapped attributes
         merger = LineMerger(self.new_point_layer)
         new_features: list[QgsFeature] = merger.create_merged_line_features(
-            self.selected_layer,
+            self.pipe_layer,
             temp_pipe_layer.fields(),
             found_fields,
         )

@@ -245,6 +245,24 @@ class Colours:
     questionable: str = "#ff1d1d"
 
 
+@dataclass(frozen=True)
+class SourceFieldNames:
+    """Contains possible field names for source layer attributes."""
+
+    dimension: tuple[str, ...] = (
+        "diameter",
+        "dim",
+        "DN",
+        "Dimension",
+        "Durchmesser",
+        "p_diameter",
+        "p_diameter_DN",
+    )
+    load_heat: tuple[str, ...] = ("b_space_heat_max_kW", "Heizung")
+    load_water: tuple[str, ...] = ("b_dhw_max_kW", "Warmwasser")
+    load_total: tuple[str, ...] = ("p_max_load_kW", "Leistung")
+
+
 class Names:
     """Contains string constants used for naming layers, files, and fields."""
 
@@ -254,24 +272,6 @@ class Names:
     excel_dir: str = "UTEC"
     excel_file_output: str = "plugin_output"
     excel_file_template: str = "UTEC_DHN.xlsx"
-
-    # Mögliche Namen für die Spalte mit den Rohrdimensionen
-    # in der Attributtabelle des alten (gewälten) Layers
-    sel_layer_field_dim: tuple[str, ...] = (
-        "diameter",
-        "dim",
-        "DN",
-        "Dimension",
-        "Durchmesser",
-        "p_diameter",
-        "p_diameter_DN",
-    )
-
-    sel_layer_field_load: tuple[str, ...] = (
-        "loadRel",
-        "p_load",
-        "p_load_rel",
-    )
 
     @ClassProperty
     def layer_group(self) -> str:
@@ -354,6 +354,10 @@ class NewPointLayerFields(Enum):
         QT_TRANSLATE_NOOP("cont_PointLayerFields", "Load - Water"),
         QMT_Double,
     )
+    load_total = (
+        QT_TRANSLATE_NOOP("cont_PointLayerFields", "Load - Total"),
+        QMT_Double,
+    )
     connected = (
         QT_TRANSLATE_NOOP("cont_PointLayerFields", "Connected Pipes"),
         QMT_String,
@@ -398,8 +402,16 @@ class NewLineLayerFields(Enum):
         QT_TRANSLATE_NOOP("cont_LineLayerFields", "Original Diameter"),
         QMT_Int,
     )
-    load = (
-        QT_TRANSLATE_NOOP("cont_LineLayerFields", "Original Load"),
+    load_heat = (
+        QT_TRANSLATE_NOOP("cont_LineLayerFields", "Original Load - Heating"),
+        QMT_Double,
+    )
+    load_water = (
+        QT_TRANSLATE_NOOP("cont_LineLayerFields", "Original Load - Water"),
+        QMT_Double,
+    )
+    load_total = (
+        QT_TRANSLATE_NOOP("cont_LineLayerFields", "Original Load - Total"),
         QMT_Double,
     )
     length = (

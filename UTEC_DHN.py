@@ -296,7 +296,7 @@ class DHN(QObject):
 
         log_debug("... STARTING PLUGIN RUN ... (run_massenermittlung)", icon="✨✨✨")
         temp_point_layer: QgsVectorLayer | None = None
-        reprojected_layer: QgsVectorLayer | None = None
+        pipe_layer: QgsVectorLayer | None = None
 
         # Re-initialize LayerManager to clear cached layers from previous runs
         self.layer_manager = LayerManager(self.project, self.iface)
@@ -309,15 +309,15 @@ class DHN(QObject):
                 progress_bar,
                 update_text,
             ):
-                reprojected_layer = self.layer_manager.selected_layer
-                if not reprojected_layer:
-                    raise_runtime_error("Reprojected layer is not initialized.")
+                pipe_layer = self.layer_manager.pipe_layer
+                if not pipe_layer:
+                    raise_runtime_error("Pipe layer is not initialized.")
 
                 # Create a temporary layer for the results
                 temp_point_layer = self.layer_manager.create_temporary_point_layer()
 
                 finder = PointOfInterestClassifier(
-                    selected_layer=reprojected_layer,
+                    selected_layer=pipe_layer,
                     temp_point_layer=temp_point_layer,
                 )
 
@@ -350,10 +350,10 @@ class DHN(QObject):
 
                 counts = get_layer_type_counts(new_layer)
                 summary_single_line: str = create_summary_message(
-                    counts, reprojected_layer.name(), multiline=False
+                    counts, pipe_layer.name(), multiline=False
                 )
                 summary_multi_line: str = create_summary_message(
-                    counts, reprojected_layer.name(), multiline=True
+                    counts, pipe_layer.name(), multiline=True
                 )
 
                 # --- Export results to XLSX for Excel ---
@@ -404,13 +404,13 @@ class DHN(QObject):
                 project.removeMapLayer(temp_point_layer.id())
                 log_debug("Temporary point layer removed.")
 
-            if reprojected_layer is not None and project is not None:
+            if pipe_layer is not None and project is not None:
                 try:
-                    project.removeMapLayer(reprojected_layer.id())
-                    log_debug("In-memory copy of the selected layer removed.")
+                    project.removeMapLayer(pipe_layer.id())
+                    log_debug("In-memory copy of the pipe layer removed.")
                 except RuntimeError:
                     log_debug(
-                        "Could not remove reprojected layer (already deleted?)",
+                        "Could not remove pipe layer (already deleted?)",
                         Qgis.Warning,
                     )
 
