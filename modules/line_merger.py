@@ -516,6 +516,7 @@ class LineMerger:
         """
         dims: set = set()
         loads: set = set()
+        original_ids: set = set()
 
         for edge in path_edges:
             feature: QgsFeature = features_map[edge.id.fid]
@@ -530,20 +531,27 @@ class LineMerger:
             ):
                 loads.add(value)
 
+            if (oid := feature.attribute("original_fid")) is not None:
+                original_ids.add(oid)
+
         attributes: dict[str, int | float] = {}
         notes: list[str] = []
+
+        if len(original_ids) > 1:
+            sorted_ids: list = sorted(original_ids)
+            notes.append(f"Merger of Original IDs: [{', '.join(map(str, sorted_ids))}]")
 
         if len(dims) == 1:
             attributes[NewLineLayerFields.dim.field_name] = next(iter(dims))
         elif len(dims) > 1:
             sorted_dims: list = sorted(dims)
-            notes.append(f"Dimensions: {', '.join(map(str, sorted_dims))}")
+            notes.append(f"Dimensions: [{', '.join(map(str, sorted_dims))}]")
 
         if len(loads) == 1:
             attributes[NewLineLayerFields.load.field_name] = next(iter(loads))
         elif len(loads) > 1:
             sorted_loads: list = sorted(loads)
-            notes.append(f"Loads: {', '.join(map(str, sorted_loads))}")
+            notes.append(f"Loads: [{', '.join(map(str, sorted_loads))}]")
 
         return attributes, "; ".join(notes)
 

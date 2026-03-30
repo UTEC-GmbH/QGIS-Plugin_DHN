@@ -346,8 +346,12 @@ class NewPointLayerFields(Enum):
         QT_TRANSLATE_NOOP("cont_PointLayerFields", "Bend-Angle"),
         QMT_Int,
     )
-    load = (
-        QT_TRANSLATE_NOOP("cont_PointLayerFields", "Load"),
+    load_heat = (
+        QT_TRANSLATE_NOOP("cont_PointLayerFields", "Load - Heating"),
+        QMT_Double,
+    )
+    load_water = (
+        QT_TRANSLATE_NOOP("cont_PointLayerFields", "Load - Water"),
         QMT_Double,
     )
     connected = (
