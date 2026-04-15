@@ -32,6 +32,7 @@ lrelease i18n/de.ts
 
 echo.
 echo Translation updated successfully.
+echo (If linguist doesn't open or lrelease is not installed, go to OSGeo4W setup and install "qt6-devel" or "qt5-devel" from the "Libs" section)
 goto :eof
 
 :: --- Environment Setup Subroutine ---
