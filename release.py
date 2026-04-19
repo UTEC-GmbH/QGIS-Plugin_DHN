@@ -22,8 +22,12 @@ from urllib.parse import ParseResult, unquote, urlparse
 from urllib.request import url2pathname
 from xml.etree.ElementTree import Element, ElementTree, SubElement
 
-from defusedxml import ElementTree as DefET
-
+try:
+    from defusedxml import ElementTree as DefET
+except ImportError:
+    print("\n❌ Error: The 'defusedxml' library is missing.")
+    print("Please install it by running: \npython -m pip install defusedxml\n")
+    sys.exit(1)    
 
 # --- Logger ---
 def setup_logging() -> None:
