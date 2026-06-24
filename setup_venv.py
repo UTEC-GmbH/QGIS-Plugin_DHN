@@ -100,6 +100,23 @@ def setup_environment() -> None:
             check=True,
         )
 
+        # Create qgis.pth inside the virtual environment's site-packages to allow tools
+        # (IDE, linter, tests) to resolve and import QGIS and its PyQt library.
+        site_packages_dir: Path = venv_path / "Lib" / "site-packages"
+        if site_packages_dir.exists():
+            qgis_path_str: str = str(
+                DEFAULT_OSGEO4W / "apps" / "qgis-ltr" / "python"
+            ).replace("\\", "/")
+            qgis_plugins_path_str: str = str(
+                DEFAULT_OSGEO4W / "apps" / "qgis-ltr" / "python" / "plugins"
+            ).replace("\\", "/")
+            pth_file: Path = site_packages_dir / "qgis.pth"
+            logger.info("Configuring QGIS path redirects at: %s", pth_file)
+            pth_file.write_text(
+                f"{qgis_path_str}\n{qgis_plugins_path_str}\n", encoding="utf-8"
+            )
+
+
         # Install testing and linting tools using the new venv's pip
         pip_exe: Path
         if not (pip_exe := venv_path / "Scripts" / "pip.exe").exists():
