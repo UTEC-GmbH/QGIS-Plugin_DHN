@@ -8,6 +8,7 @@ Usage:
        python setup_venv.py
 """
 
+import contextlib
 import logging
 import subprocess
 import sys
@@ -29,6 +30,11 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 def setup_logging() -> None:
     """Configure the module's logger to print to the console."""
+    # Ensure stdout handles non-ASCII characters
+    # without raising UnicodeEncodeError on Windows
+    if hasattr(sys.stdout, "reconfigure"):
+        with contextlib.suppress(Exception):
+            sys.stdout.reconfigure(errors="replace")
     handler: logging.StreamHandler = logging.StreamHandler(sys.stdout)
     formatter: logging.Formatter = logging.Formatter("%(message)s")
     handler.setFormatter(formatter)
@@ -116,6 +122,46 @@ def setup_environment() -> None:
                 f"{qgis_path_str}\n{qgis_plugins_path_str}\n", encoding="utf-8"
             )
 
+            # Create sitecustomize.py to add OSGeo4W DLL directories
+            # to the Python DLL search path
+            # and configure QGIS-related environment variables automatically.
+            sitecustomize_file: Path = site_packages_dir / "sitecustomize.py"
+            logger.info(
+                "Configuring OSGeo4W DLL paths and environment variables at: %s",
+                sitecustomize_file,
+            )
+            sitecustomize_content = f"""
+import os
+import sys
+
+# Configure environment variables and DLL directories for OSGeo4W QGIS
+OSGEO4W_ROOT = r"{DEFAULT_OSGEO4W}"
+
+if os.path.exists(OSGEO4W_ROOT):
+    # Define paths
+    bin_path = os.path.join(OSGEO4W_ROOT, "bin")
+    qgis_bin = os.path.join(OSGEO4W_ROOT, "apps", "qgis-ltr", "bin")
+    qt5_bin = os.path.join(OSGEO4W_ROOT, "apps", "qt5", "bin")
+    
+    # 1. Add DLL directories for Python 3.8+ on Windows
+    for path in [bin_path, qgis_bin, qt5_bin]:
+        if os.path.exists(path):
+            os.add_dll_directory(path)
+            
+    # 2. Update system PATH to ensure subprocesses and legacy DLL loaders find them
+    path_env = os.environ.get("PATH", "")
+    osgeo_paths = ";".join([bin_path, qgis_bin, qt5_bin])
+    if osgeo_paths not in path_env:
+        os.environ["PATH"] = osgeo_paths + ";" + path_env
+
+    # 3. Set OSGeo4W / QGIS specific environment variables
+    os.environ["QGIS_PREFIX_PATH"] = os.path.join(OSGEO4W_ROOT, "apps", "qgis-ltr").replace("\\\\", "/")
+    os.environ["GDAL_FILENAME_IS_UTF8"] = "YES"
+    os.environ["VSI_CACHE"] = "TRUE"
+    os.environ["VSI_CACHE_SIZE"] = "1000000"
+    os.environ["QT_PLUGIN_PATH"] = os.path.join(OSGEO4W_ROOT, "apps", "qgis-ltr", "qtplugins") + ";" + os.path.join(OSGEO4W_ROOT, "apps", "qt5", "plugins")
+"""  # noqa: E501, S608
+            sitecustomize_file.write_text(sitecustomize_content, encoding="utf-8")
 
         # Install testing and linting tools using the new venv's pip
         pip_exe: Path
