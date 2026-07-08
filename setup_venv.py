@@ -23,6 +23,8 @@ DEV_DEPENDENCIES: Final[list[str]] = [
     "pytest-qt",
     "pytest-cov",
     "ruff",
+    "PyQt5-stubs",
+    "PyQt6-stubs",
 ]
 
 logger: logging.Logger = logging.getLogger(__name__)
