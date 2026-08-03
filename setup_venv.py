@@ -25,6 +25,7 @@ DEV_DEPENDENCIES: Final[list[str]] = [
     "ruff",
     "PyQt5-stubs",
     "PyQt6-stubs",
+    "qgis-stubs",
 ]
 
 logger: logging.Logger = logging.getLogger(__name__)
