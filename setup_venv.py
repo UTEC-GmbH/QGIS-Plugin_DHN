@@ -10,6 +10,7 @@ Usage:
 
 import contextlib
 import logging
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -93,6 +94,46 @@ def get_qgis_python_path(root_path: Path) -> Path:
     return python_exes[0]
 
 
+def create_virtual_environment(qgis_python: Path, venv_path: Path) -> None:
+    """Create the virtual environment with a venv fallback to virtualenv."""
+    logger.info("Using QGIS Python: %s", qgis_python)
+    logger.info("Creating venv at: %s", venv_path)
+
+    attempts: list[list[str]] = [
+        [str(qgis_python), "-m", "venv", str(venv_path), "--system-site-packages"],
+        [
+            str(qgis_python),
+            "-m",
+            "virtualenv",
+            str(venv_path),
+            "--system-site-packages",
+        ],
+    ]
+
+    if virtualenv_exe := shutil.which("virtualenv"):
+        attempts.append([virtualenv_exe, str(venv_path), "--system-site-packages"])
+
+    errors: list[str] = []
+    for command in attempts:
+        try:
+            subprocess.run(command, check=True)  # noqa: S603
+            logger.info(
+                "✅ Virtual environment created successfully with: %s",
+                " ".join(command),
+            )
+            return  # noqa: TRY300
+        except (FileNotFoundError, subprocess.CalledProcessError) as exc:  # noqa: PERF203
+            errors.append(f"{command[0]} {' '.join(command[1:])}: {exc}")
+            logger.warning("⚠️ Virtual environment creation failed using %s", command)
+
+    raise RuntimeError(
+        """❌ Unable to create the virtual environment with venv or virtualenv. 
+        Use OSGeo4W setup to install python3-venv or python3-virtualenv. 
+        Errors encountered: """
+        + " | ".join(errors)
+    )
+
+
 def setup_environment() -> None:
     """Create the venv and install development dependencies."""
     try:
@@ -100,14 +141,7 @@ def setup_environment() -> None:
         project_root: Path = Path(__file__).resolve().parent
         venv_path: Path = project_root / ".venv"
 
-        logger.info("Using QGIS Python: %s", qgis_python)
-        logger.info("Creating venv at: %s", venv_path)
-
-        # Create venv with system-site-packages enabled
-        subprocess.run(  # noqa: S603
-            [str(qgis_python), "-m", "venv", str(venv_path), "--system-site-packages"],
-            check=True,
-        )
+        create_virtual_environment(qgis_python, venv_path)
 
         # Create qgis.pth inside the virtual environment's site-packages to allow tools
         # (IDE, linter, tests) to resolve and import QGIS and its PyQt library.
