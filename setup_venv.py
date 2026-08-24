@@ -111,7 +111,15 @@ def create_virtual_environment(qgis_python: Path, venv_path: Path) -> None:
     ]
 
     if virtualenv_exe := shutil.which("virtualenv"):
-        attempts.append([virtualenv_exe, str(venv_path), "--system-site-packages"])
+        attempts.append(
+            [
+                virtualenv_exe,
+                "--python",
+                str(qgis_python),
+                str(venv_path),
+                "--system-site-packages",
+            ]
+        )
 
     errors: list[str] = []
     for command in attempts:
