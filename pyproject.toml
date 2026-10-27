@@ -38,11 +38,11 @@ extraPaths = [
 
 [tool.pyrefly]
 python-interpreter-path = ".venv/Scripts/python.exe"
-search-path = [
-    ".",
-    "C:\\OSGeo4W\\apps\\qgis-ltr\\python",
-    "C:\\OSGeo4W\\apps\\qgis-ltr\\python\\plugins",
-    "C:\\OSGeo4W\\apps\\Python312\\Lib\\site-packages",
+search-path = ["."]
+site-packages-path = [
+    'C:\OSGeo4W\apps\qgis-ltr\python',
+    'C:\OSGeo4W\apps\qgis-ltr\python\plugins',
+    'C:\OSGeo4W\apps\Python312\Lib\site-packages',
 ]
 
 [tool.pylint.main]
