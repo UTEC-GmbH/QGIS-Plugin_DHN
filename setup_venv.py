@@ -1,4 +1,4 @@
-"""Automates the creation of a QGIS-compatible virtual environment.
+r"""Automates the creation of a QGIS-compatible virtual environment.
 
 Usage:
     1. Open the OSGeo4W Shell from the Windows Start Menu.
@@ -6,6 +6,11 @@ Usage:
        cd path_to_folder
     3. Execute the setup script using the 'python' command:
        python setup_venv.py
+    4. Before using the venv from the OSGeo4W Shell, clear its Python overrides:
+       set PYTHONHOME=
+       set PYTHONPATH=
+       set PYTHONEXECUTABLE=
+       .venv\\Scripts\\activate
 
 Set OSGEO4W_ROOT or QGIS_PREFIX_PATH to use a non-default installation.
 In VS Code, select the project's .venv interpreter if it is not selected
@@ -121,10 +126,42 @@ def get_qgis_prefix_path(root_path: Path) -> Path:
     return prefix_path
 
 
+def get_venv_subprocess_environment() -> dict[str, str]:
+    """Return an environment that does not override virtual-environment Python."""
+    env = os.environ.copy()
+    for variable in ("PYTHONHOME", "PYTHONPATH", "PYTHONEXECUTABLE"):
+        env.pop(variable, None)
+    return env
+
+
+def configure_venv_python_home(qgis_python: Path, venv_path: Path) -> None:
+    """Point the venv at the OSGeo4W Python directory
+    containing the standard library.
+    """
+    config_file = venv_path / "pyvenv.cfg"
+    if not config_file.is_file():
+        _fail(f"Virtual environment configuration not found at {config_file}")
+
+    python_home = qgis_python.parent
+    if not (python_home / "Lib" / "encodings").is_dir():
+        _fail(f"Python standard library not found under {python_home}")
+
+    config_lines = config_file.read_text(encoding="utf-8").splitlines()
+    for index, line in enumerate(config_lines):
+        if line.partition("=")[0].strip().lower() == "home":
+            config_lines[index] = f"home = {python_home}"
+            break
+    else:
+        _fail(f"Python home setting not found in {config_file}")
+
+    config_file.write_text("\n".join(config_lines) + "\n", encoding="utf-8")
+
+
 def create_virtual_environment(qgis_python: Path, venv_path: Path) -> None:
     """Create the virtual environment with a venv fallback to virtualenv."""
     logger.info("Using QGIS Python: %s", qgis_python)
     logger.info("Creating venv at: %s", venv_path)
+    subprocess_env = get_venv_subprocess_environment()
 
     attempts: list[list[str]] = [
         [str(qgis_python), "-m", "venv", str(venv_path), "--system-site-packages"],
@@ -151,7 +188,8 @@ def create_virtual_environment(qgis_python: Path, venv_path: Path) -> None:
     errors: list[str] = []
     for command in attempts:
         try:
-            subprocess.run(command, check=True)  # noqa: S603
+            subprocess.run(command, check=True, env=subprocess_env)  # noqa: S603
+            configure_venv_python_home(qgis_python, venv_path)
             logger.info(
                 "✅ Virtual environment created successfully with: %s",
                 " ".join(command),
@@ -250,12 +288,14 @@ if os.path.exists(OSGEO4W_ROOT):
                 ),
             ],
             check=True,
+            env=get_venv_subprocess_environment(),
         )
 
         logger.info("Installing development dependencies...")
         subprocess.run(  # noqa: S603
             [str(venv_python), "-m", "pip", "install", *DEV_DEPENDENCIES],
             check=True,
+            env=get_venv_subprocess_environment(),
         )
 
         logger.info("\n✅ Virtual environment setup complete!")
