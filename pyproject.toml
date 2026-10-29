@@ -16,12 +16,9 @@ line-length = 88
     "D",     # Disable all pydocstyle rules for tests
     "SLF001",# Allow access to private members in tests
 ]
-
-[tool.mypy]
-
-[[tool.mypy.overrides]]
-module = "defusedxml"
-ignore_missing_imports = true
+"release.py" = [
+    "T201",  # `print` found
+]
 
 [tool.pyright]
 reportAttributeAccessIssue = "none"
@@ -38,10 +35,12 @@ extraPaths = [
 
 [tool.pyrefly]
 python-interpreter-path = ".venv/Scripts/python.exe"
-search-path = ["."]
-site-packages-path = [
-    'C:\OSGeo4W\apps\qgis-ltr\python',
-    'C:\OSGeo4W\apps\qgis-ltr\python\plugins',
+search-path = [
+    ".",
+    "C:\\OSGeo4W\\apps\\qgis-ltr\\python",
+    "C:\\OSGeo4W\\apps\\qgis-ltr\\python\\plugins",
+]
+site-package-path = [
     'C:\OSGeo4W\apps\Python312\Lib\site-packages',
 ]
 

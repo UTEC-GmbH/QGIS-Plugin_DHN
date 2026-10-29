@@ -1,14 +1,16 @@
 """A script to automate the plugin release process.
 
-This script provides a single source of truth for the plugin's version number,
-reading it from metadata.txt and automatically updating the private repository's
-plugins.xml file. It then compiles and packages the plugin.
+This script reads the plugin version from metadata.txt, compiles translations,
+packages the plugin, and updates the separate GitHub Pages release repository.
 
 To use:
 1. Update the 'version' in metadata.txt.
-2. Run this script from the OSGeo4W Shell: python release.py
+2. Run this script from the OSGeo4W Shell:
+   python release.py
+   Optionally, pass --output-dir to use another repository clone.
 """
 
+import argparse
 import configparser
 import logging
 import os
@@ -18,16 +20,16 @@ import tempfile
 import zipfile
 from pathlib import Path
 from typing import TypedDict
-from urllib.parse import ParseResult, unquote, urlparse
-from urllib.request import url2pathname
 from xml.etree.ElementTree import Element, ElementTree, SubElement
 
 try:
+    # pyrefly: ignore[untyped-import]
     from defusedxml import ElementTree as DefET
 except ImportError:
-    print("\n❌ Error: The 'defusedxml' library is missing.")
+    print("\nError: The 'defusedxml' library is missing.")
     print("Please install it by running: \npython -m pip install defusedxml\n")
-    sys.exit(1)    
+    sys.exit(1)
+
 
 # --- Logger ---
 def setup_logging() -> None:
@@ -64,7 +66,7 @@ class PluginMetadata(TypedDict):
     qgis_maximum_version: str
     author: str
     email: str
-    url_base: str
+    download_url_base: str
 
 
 class ReleaseScriptError(Exception):
@@ -106,7 +108,7 @@ def get_plugin_metadata() -> PluginMetadata:
             "qgis_maximum_version": config.get("general", "qgisMaximumVersion"),
             "author": config.get("general", "author"),
             "email": config.get("general", "email"),
-            "url_base": config.get("general", "download_url_base"),
+            "download_url_base": config.get("general", "download_url_base"),
         }
     except configparser.NoSectionError as e:
         msg = f"Could not find required section '[{e.section}]' in {metadata_path}."
@@ -129,28 +131,6 @@ def get_plugin_metadata() -> PluginMetadata:
     return metadata
 
 
-def _file_url_to_path(url: str) -> Path:
-    """Convert a file URL to a local filesystem Path object.
-
-    Args:
-        url: The file URL to convert (must use the 'file://' scheme).
-
-    Returns:
-        Path: The corresponding local filesystem path.
-
-    Raises:
-        ReleaseScriptError: If the URL does not use the 'file://' scheme.
-    """
-    parsed: ParseResult = urlparse(url)
-    if parsed.scheme != "file":
-        msg = "`download_url_base` must use the file:// scheme."
-        raise ReleaseScriptError(msg)
-    path_part: str = url2pathname(unquote(parsed.path))
-    if parsed.netloc:
-        return Path(f"//{parsed.netloc}{path_part}")
-    return Path(path_part)
-
-
 """
 
 plugins.xml
@@ -158,11 +138,11 @@ plugins.xml
 """
 
 
-def _get_repository_path(metadata: PluginMetadata) -> Path:
-    """Get repository path and ensure the directory exists.
+def _get_repository_path(output_dir: Path) -> Path:
+    """Get the local repository path and ensure the directory exists.
 
     Args:
-        metadata: The plugin's metadata.
+        output_dir: The local directory where repository files are published.
 
     Returns:
         The master XML path.
@@ -170,17 +150,13 @@ def _get_repository_path(metadata: PluginMetadata) -> Path:
     Raises:
         ReleaseScriptError: If the directory cannot be accessed or created.
     """
-    url_base: str = metadata["url_base"]
-    shared_repo_path: Path = _file_url_to_path(url_base)
-    master_xml_path: Path = shared_repo_path / "plugins.xml"
-
     try:
-        shared_repo_path.mkdir(parents=True, exist_ok=True)
+        output_dir.mkdir(parents=True, exist_ok=True)
     except OSError as e:
-        msg: str = f"Could not access or create shared repository directory: {e}"
+        msg: str = f"Could not access or create repository output directory: {e}"
         raise ReleaseScriptError(msg) from e
 
-    return master_xml_path
+    return output_dir / "plugins.xml"
 
 
 def _load_or_create_xml_tree(xml_path: Path) -> tuple[ElementTree, Element]:
@@ -195,23 +171,27 @@ def _load_or_create_xml_tree(xml_path: Path) -> tuple[ElementTree, Element]:
     Raises:
         ReleaseScriptError: If the XML file is malformed.
     """
-    if xml_path.exists():
+    if xml_path.exists() and xml_path.stat().st_size > 0:
         logger.info("Reading master repository file: %s", xml_path)
         try:
             tree: ElementTree = DefET.parse(xml_path)
-            root: Element = tree.getroot()  # pyright: ignore[reportAssignmentType]
+            # pyrefly: ignore[bad-assignment]
+            root: Element = tree.getroot()
         except DefET.ParseError as e:
             msg: str = f"Error parsing {xml_path}."
             logger.exception("❌ %s", msg)
             raise ReleaseScriptError(msg) from e
         return tree, root
 
-    logger.warning(
-        "⚠️ Master repository file not found at '%s'. "
-        "This is expected if it's the first plugin release.",
-        xml_path,
-    )
-    logger.info("Creating a new XML structure in memory.")
+    if xml_path.exists():
+        logger.info("Creating initial XML structure for empty repository file.")
+    else:
+        logger.warning(
+            "⚠️ Master repository file not found at '%s'. "
+            "This is expected if it's the first plugin release.",
+            xml_path,
+        )
+        logger.info("Creating a new XML structure in memory.")
     root = Element("plugins")
     tree = ElementTree(root)
 
@@ -301,7 +281,7 @@ def _update_plugin_node_details(plugin_node: Element, metadata: PluginMetadata) 
     new_zip_filename: str = f"{clean_plugin_name}.zip"
     _update_xml_tag(plugin_node, "file_name", new_zip_filename)
 
-    new_url: str = f"{metadata['url_base'].rstrip('/')}/{new_zip_filename}"
+    new_url: str = f"{metadata['download_url_base'].rstrip('/')}/{new_zip_filename}"
     _update_xml_tag(plugin_node, "download_url", new_url)
 
 
@@ -335,15 +315,15 @@ def _write_plugin_xml(tree: ElementTree, destination_path: Path) -> None:
         Path(tmp_name).unlink(missing_ok=True)
 
 
-def update_repository_file(metadata: PluginMetadata) -> None:
-    # sourcery skip: extract-method
-    """Update the master plugins.xml file directly in the shared repository.
+def update_repository_file(metadata: PluginMetadata, output_dir: Path) -> None:
+    """Update the master plugins.xml file in the local repository clone.
 
     This function implements a fully automated, multi-plugin-safe workflow by
     orchestrating several helper functions.
 
     Args:
         metadata: A dictionary containing the plugin's core metadata.
+        output_dir: The local directory where repository files are published.
 
     Raises:
         ReleaseScriptError: If any step in the process fails.
@@ -355,7 +335,7 @@ def update_repository_file(metadata: PluginMetadata) -> None:
 
     try:
         # 1. Get path and ensure directory exists
-        master_xml_path: Path = _get_repository_path(metadata)
+        master_xml_path: Path = _get_repository_path(output_dir)
 
         # 2. Load existing XML or create a new one
         tree, root = _load_or_create_xml_tree(master_xml_path)
@@ -479,16 +459,16 @@ def _add_directories_to_zip(
                 zipf.write(file_path, arcname)
 
 
-def package_plugin(metadata: PluginMetadata) -> None:
+def package_plugin(metadata: PluginMetadata, output_dir: Path) -> None:
     # sourcery skip: extract-method
-    """Create a zip archive of the plugin directly in the shared repository.
+    """Create a zip archive of the plugin in the release repository directory.
 
-    This function orchestrates the packaging process by reading configuration,
-    collecting files, and creating a zip archive in the shared repository.
+    This function orchestrates packaging by collecting files and creating a zip
+    archive in the local repository directory.
 
     Args:
-        metadata: The plugin's metadata, used to determine the output path
-                  and zip file name.
+        metadata: The plugin's metadata, used to determine the zip file name.
+        output_dir: The local directory where the package is written.
 
     Raises:
         ReleaseScriptError: If the packaging process fails at any step.
@@ -512,8 +492,13 @@ def package_plugin(metadata: PluginMetadata) -> None:
 
     # 2. Prepare content and paths
     clean_metadata_content: str = _get_clean_metadata_content(plugin_name)
-    shared_repo_path: Path = _file_url_to_path(metadata["url_base"])
-    zip_path: Path = shared_repo_path / f"{clean_plugin_name}.zip"
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        msg: str = f"Could not access or create release output directory: {e}"
+        raise ReleaseScriptError(msg) from e
+
+    zip_path: Path = output_dir / f"{clean_plugin_name}.zip"
     logger.info("Creating zip archive at: %s", zip_path)
 
     # 3. Create the zip archive
@@ -535,7 +520,7 @@ def package_plugin(metadata: PluginMetadata) -> None:
         )
 
     logger.info(
-        "✅ Successfully created plugin package in shared repository: %s", zip_path
+        "✅ Successfully created plugin package in release repository: %s", zip_path
     )
 
 
@@ -624,14 +609,14 @@ def compile_translations(metadata: PluginMetadata) -> None:
             raise ReleaseScriptError(msg) from e
 
 
-def run_release_process() -> None:
+def run_release_process(output_dir: Path) -> None:
     """Automate the plugin release process.
 
     This main function orchestrates the entire release process:
     1. Reads metadata.
-    2. Updates the repository XML directly on the shared drive.
-    3. Compiles resources and translations.
-    4. Packages the plugin into a zip file directly on the shared drive.
+    2. Compiles translations.
+    3. Packages the plugin into the local repository directory.
+    4. Updates plugins.xml with the public download URL.
 
     Raises:
         ReleaseScriptError: If any step in the release process fails.
@@ -651,29 +636,38 @@ def run_release_process() -> None:
         )
         metadata["name"] = release_name
 
-    update_repository_file(metadata)
-
     compile_translations(metadata)
-    package_plugin(metadata)
+    package_plugin(metadata, output_dir)
+    update_repository_file(metadata, output_dir)
 
     logger.info("\n🎉 --- Release process complete! --- 🎉")
-    shared_repo_path: Path = _file_url_to_path(metadata["url_base"])
-
     logger.info(
-        "✅ Plugin successfully released directly to the shared repository: %s",
-        shared_repo_path,
+        "✅ Plugin package and repository file are ready in: %s",
+        output_dir,
     )
 
 
 def main() -> int:
     """CLI entry point. Sets up logging and runs the release process.
 
+    The output directory must be the docs folder of the cloned
+    QGIS-Plugin-Releases repository, which is published via GitHub Pages.
+
     Returns:
         An exit code: 0 for success, 1 for failure.
     """
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path(r"C:\Github_Repos\QGIS-Plugin-Releases\docs"),
+        help="Local docs directory of the GitHub Pages release repository",
+    )
+    args = parser.parse_args()
+
     setup_logging()
     try:
-        run_release_process()
+        run_release_process(args.output_dir)
     except ReleaseScriptError as e:
         logger.critical("❌ A critical error occurred: %s", e)
         return 1

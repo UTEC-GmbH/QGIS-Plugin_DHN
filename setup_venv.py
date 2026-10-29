@@ -6,10 +6,16 @@ Usage:
        cd path_to_folder
     3. Execute the setup script using the 'python' command:
        python setup_venv.py
+
+Set OSGEO4W_ROOT or QGIS_PREFIX_PATH to use a non-default installation.
+In VS Code, select the project's .venv interpreter if it is not selected
+automatically.
 """
 
 import contextlib
 import logging
+import os
+import re
 import shutil
 import subprocess
 import sys
@@ -17,12 +23,13 @@ from pathlib import Path
 from typing import Final, NoReturn
 
 # Default OSGeo4W path for QGIS LTR
-DEFAULT_OSGEO4W: Final[Path] = Path("C:/OSGeo4W")
+DEFAULT_OSGEO4W: Final[Path] = Path(os.environ.get("OSGEO4W_ROOT") or "C:/OSGeo4W")
 DEV_DEPENDENCIES: Final[list[str]] = [
     "pytest",
     "pytest-qgis",
     "pytest-qt",
     "pytest-cov",
+    "pyrefly",
     "ruff",
     "PyQt5-stubs",
     "PyQt6-stubs",
@@ -79,19 +86,39 @@ def get_qgis_python_path(root_path: Path) -> Path:
         _fail(f"OSGeo4W apps directory not found at {apps_dir}")
 
     # Find all directories starting with 'Python' that contain a valid executable
-    python_exes: list[Path] = sorted(
-        [
-            exe
-            for directory in apps_dir.glob("Python*")
-            if (exe := directory / "python.exe").exists()
-        ],
-        reverse=True,
-    )
+    python_exes = [
+        exe
+        for directory in apps_dir.glob("Python*")
+        if (exe := directory / "python.exe").exists()
+    ]
 
     if not python_exes:
         _fail("No Python installation found in OSGeo4W/apps.")
 
-    return python_exes[0]
+    def version_key(executable: Path) -> tuple[int, int]:
+        match = re.fullmatch(r"Python(\d)(\d+)", executable.parent.name)
+        if match is None:
+            return (0, 0)
+        return int(match.group(1)), int(match.group(2))
+
+    return max(python_exes, key=version_key)
+
+
+def get_qgis_prefix_path(root_path: Path) -> Path:
+    """Locate the QGIS installation prefix within OSGeo4W."""
+    configured_prefix = os.environ.get("QGIS_PREFIX_PATH")
+    if configured_prefix:
+        prefix_path = Path(configured_prefix)
+        if not (prefix_path / "python" / "qgis").is_dir():
+            _fail(f"QGIS Python package not found at {prefix_path / 'python' / 'qgis'}")
+        return prefix_path
+
+    qgis_name = os.environ.get("QGIS_ENVNAME", "qgis-ltr")
+    prefix_path = root_path / "apps" / qgis_name
+    if not (prefix_path / "python" / "qgis").is_dir():
+        _fail(f"QGIS Python package not found at {prefix_path / 'python' / 'qgis'}")
+
+    return prefix_path
 
 
 def create_virtual_environment(qgis_python: Path, venv_path: Path) -> None:
@@ -130,7 +157,7 @@ def create_virtual_environment(qgis_python: Path, venv_path: Path) -> None:
                 " ".join(command),
             )
             return  # noqa: TRY300
-        except (FileNotFoundError, subprocess.CalledProcessError) as exc:  # noqa: PERF203
+        except (FileNotFoundError, subprocess.CalledProcessError) as exc:
             errors.append(f"{command[0]} {' '.join(command[1:])}: {exc}")
             logger.warning("⚠️ Virtual environment creation failed using %s", command)
 
@@ -145,7 +172,9 @@ def create_virtual_environment(qgis_python: Path, venv_path: Path) -> None:
 def setup_environment() -> None:
     """Create the venv and install development dependencies."""
     try:
-        qgis_python: Path = get_qgis_python_path(DEFAULT_OSGEO4W)
+        osgeo4w_root = DEFAULT_OSGEO4W
+        qgis_prefix = get_qgis_prefix_path(osgeo4w_root)
+        qgis_python: Path = get_qgis_python_path(osgeo4w_root)
         project_root: Path = Path(__file__).resolve().parent
         venv_path: Path = project_root / ".venv"
 
@@ -154,68 +183,78 @@ def setup_environment() -> None:
         # Create qgis.pth inside the virtual environment's site-packages to allow tools
         # (IDE, linter, tests) to resolve and import QGIS and its PyQt library.
         site_packages_dir: Path = venv_path / "Lib" / "site-packages"
-        if site_packages_dir.exists():
-            qgis_path_str: str = str(
-                DEFAULT_OSGEO4W / "apps" / "qgis-ltr" / "python"
-            ).replace("\\", "/")
-            qgis_plugins_path_str: str = str(
-                DEFAULT_OSGEO4W / "apps" / "qgis-ltr" / "python" / "plugins"
-            ).replace("\\", "/")
-            pth_file: Path = site_packages_dir / "qgis.pth"
-            logger.info("Configuring QGIS path redirects at: %s", pth_file)
-            pth_file.write_text(
-                f"{qgis_path_str}\n{qgis_plugins_path_str}\n", encoding="utf-8"
-            )
+        if not site_packages_dir.is_dir():
+            _fail(f"Virtual environment site-packages not found at {site_packages_dir}")
 
-            # Create sitecustomize.py to add OSGeo4W DLL directories
-            # to the Python DLL search path
-            # and configure QGIS-related environment variables automatically.
-            sitecustomize_file: Path = site_packages_dir / "sitecustomize.py"
-            logger.info(
-                "Configuring OSGeo4W DLL paths and environment variables at: %s",
-                sitecustomize_file,
-            )
-            sitecustomize_content = f"""
+        qgis_path_str = (qgis_prefix / "python").as_posix()
+        qgis_plugins_path_str = (qgis_prefix / "python" / "plugins").as_posix()
+        pth_file: Path = site_packages_dir / "qgis.pth"
+        logger.info("Configuring QGIS path redirects at: %s", pth_file)
+        pth_file.write_text(
+            f"{qgis_path_str}\n{qgis_plugins_path_str}\n", encoding="utf-8"
+        )
+
+        # Create sitecustomize.py to configure OSGeo4W DLL and QGIS paths.
+        sitecustomize_file: Path = site_packages_dir / "sitecustomize.py"
+        logger.info(
+            "Configuring OSGeo4W DLL paths and environment variables at: %s",
+            sitecustomize_file,
+        )
+        sitecustomize_content = f"""
 import os
-import sys
 
-# Configure environment variables and DLL directories for OSGeo4W QGIS
-OSGEO4W_ROOT = r"{DEFAULT_OSGEO4W}"
+OSGEO4W_ROOT = {str(osgeo4w_root)!r}
+QGIS_PREFIX = {str(qgis_prefix)!r}
+QT_PREFIX = os.path.join(OSGEO4W_ROOT, "apps", "qt5")
 
 if os.path.exists(OSGEO4W_ROOT):
-    # Define paths
     bin_path = os.path.join(OSGEO4W_ROOT, "bin")
-    qgis_bin = os.path.join(OSGEO4W_ROOT, "apps", "qgis-ltr", "bin")
-    qt5_bin = os.path.join(OSGEO4W_ROOT, "apps", "qt5", "bin")
-    
-    # 1. Add DLL directories for Python 3.8+ on Windows
-    for path in [bin_path, qgis_bin, qt5_bin]:
-        if os.path.exists(path):
-            os.add_dll_directory(path)
-            
-    # 2. Update system PATH to ensure subprocesses and legacy DLL loaders find them
-    path_env = os.environ.get("PATH", "")
-    osgeo_paths = ";".join([bin_path, qgis_bin, qt5_bin])
-    if osgeo_paths not in path_env:
-        os.environ["PATH"] = osgeo_paths + ";" + path_env
+    qgis_bin = os.path.join(QGIS_PREFIX, "bin")
+    qt5_bin = os.path.join(QT_PREFIX, "bin")
+    dll_directories = [bin_path, qgis_bin, qt5_bin]
+    # Keep handles alive so these DLL search directories remain active.
+    _dll_directory_handles = [
+        os.add_dll_directory(path) for path in dll_directories if os.path.isdir(path)
+    ]
 
-    # 3. Set OSGeo4W / QGIS specific environment variables
-    os.environ["QGIS_PREFIX_PATH"] = os.path.join(OSGEO4W_ROOT, "apps", "qgis-ltr").replace("\\\\", "/")
+    path_entries = os.environ.get("PATH", "").split(os.pathsep)
+    os.environ["PATH"] = os.pathsep.join(
+        [path for path in dll_directories if os.path.isdir(path)] + path_entries
+    )
+    os.environ["QGIS_PREFIX_PATH"] = QGIS_PREFIX.replace("\\\\", "/")
     os.environ["GDAL_FILENAME_IS_UTF8"] = "YES"
     os.environ["VSI_CACHE"] = "TRUE"
     os.environ["VSI_CACHE_SIZE"] = "1000000"
-    os.environ["QT_PLUGIN_PATH"] = os.path.join(OSGEO4W_ROOT, "apps", "qgis-ltr", "qtplugins") + ";" + os.path.join(OSGEO4W_ROOT, "apps", "qt5", "plugins")
-"""  # noqa: E501, S608
-            sitecustomize_file.write_text(sitecustomize_content, encoding="utf-8")
+    os.environ["QT_PLUGIN_PATH"] = os.pathsep.join(
+        [
+            os.path.join(QGIS_PREFIX, "qtplugins"),
+            os.path.join(QT_PREFIX, "plugins"),
+        ]
+    )
+"""
+        sitecustomize_file.write_text(sitecustomize_content, encoding="utf-8")
 
-        # Install testing and linting tools using the new venv's pip
-        pip_exe: Path
-        if not (pip_exe := venv_path / "Scripts" / "pip.exe").exists():
-            _fail(f"Failed to create venv: {pip_exe} missing.")
+        venv_python = venv_path / "Scripts" / "python.exe"
+        if not venv_python.is_file():
+            _fail(f"Failed to create venv: {venv_python} missing.")
+
+        logger.info("Verifying that the virtual environment can import QGIS...")
+        subprocess.run(  # noqa: S603
+            [
+                str(venv_python),
+                "-c",
+                (
+                    "from qgis.PyQt.QtGui import QIcon; "
+                    "from qgis.core import Qgis; "
+                    "print(QIcon, Qgis.MessageLevel.Warning)"
+                ),
+            ],
+            check=True,
+        )
 
         logger.info("Installing development dependencies...")
         subprocess.run(  # noqa: S603
-            [str(pip_exe), "install", *DEV_DEPENDENCIES],
+            [str(venv_python), "-m", "pip", "install", *DEV_DEPENDENCIES],
             check=True,
         )
 
