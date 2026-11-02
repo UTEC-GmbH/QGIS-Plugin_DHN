@@ -299,9 +299,9 @@
         <translation>Hauptleitung: {0}</translation>
     </message>
     <message>
-        <location filename="../modules/t_intersection_analyzer.py" line="343"/>
-        <source>Connecting pipe has a larger diameter than the main pipe.</source>
-        <translation>Anschlussleitung hat größere Dimension als Hauptleitung.</translation>
+        <location filename="../modules/t_intersection_analyzer.py" line="349"/>
+        <source>Connecting pipe (DN {0}) is larger than the main pipe (DN {1}).</source>
+        <translation>Die Anschlussleitung (DN {0}) hat einen größeren Durchmesser als die Hauptleitung (DN {1}).</translation>
     </message>
     <message>
         <location filename="../modules/t_intersection_analyzer.py" line="395"/>

@@ -420,6 +420,19 @@ class NetworkNumberer:
                     edge.pipe_id, idx_desig_pipe, pipe_designation
                 )
 
+            # The root node has no upstream pipe, so its HCs are not visited as
+            # the end node of an edge. Assign them to the first branch instead.
+            if index == 1 and (hcs := node_hcs.get(start_node, [])):
+                hcs.sort(key=self._get_conn_pipe_length, reverse=True)
+
+                for hc_fid in hcs:
+                    num_str = f"{branch_id}-{counter:03d}"
+                    self.point_layer.changeAttributeValue(
+                        hc_fid, idx_desig_pt, num_str
+                    )
+                    self._update_conn_pipe_name(hc_fid, f"a{num_str}", branch_id)
+                    counter += 1
+
         self.pipe_layer.commitChanges()
         self.point_layer.commitChanges()
 
