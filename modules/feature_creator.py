@@ -4,7 +4,6 @@ This module contains the FeatureCreator class for creating QgsFeature objects.
 """
 
 from qgis.core import (
-    Qgis,
     QgsFeature,
     QgsGeometry,
     QgsPointXY,
@@ -13,7 +12,7 @@ from qgis.core import (
 from qgis.PyQt.QtCore import QCoreApplication
 
 from .constants import FittingType, NewPointLayerFields, Numbers, PipeDimensions
-from .logs_and_errors import log_debug
+from .logs_and_errors import log_debug, lvl
 from .vector_analysis_tools import VectorAnalysisTools
 
 
@@ -60,7 +59,7 @@ class FeatureCreator(VectorAnalysisTools):
             log_debug(
                 f"Could not create questionable point at {point.asWkt()}: "
                 "No features found.",
-                Qgis.Warning,
+                lvl.Warning,
             )
             return 0
 

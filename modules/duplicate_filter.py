@@ -6,7 +6,6 @@ This module contains the DuplicateFilter class for cleaning up layers.
 from dataclasses import dataclass
 
 from qgis.core import (
-    Qgis,
     QgsFeature,
     QgsFeatureRequest,
     QgsGeometry,
@@ -14,7 +13,7 @@ from qgis.core import (
 )
 
 from .constants import NewPointLayerFields
-from .logs_and_errors import log_debug, raise_runtime_error
+from .logs_and_errors import log_debug, lvl, raise_runtime_error
 
 
 @dataclass
@@ -159,7 +158,7 @@ class DuplicateFilter:
                 for fid in fids_to_delete:
                     layer.deleteFeature(fid)
         except Exception as e:  # noqa: BLE001
-            log_debug(f"Batch deletion failed: {e}", Qgis.Warning)
+            log_debug(f"Batch deletion failed: {e}", lvl.Warning)
             for fid in fids_to_delete:
                 layer.deleteFeature(fid)
 
@@ -183,5 +182,5 @@ class DuplicateFilter:
         log_debug(
             f"Duplicate check finished. {deleted_count} duplicates removed."
             f"{type_summary}",
-            Qgis.Success,
+            lvl.Success,
         )

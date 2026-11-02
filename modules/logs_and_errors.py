@@ -6,7 +6,7 @@ This module contains logging functions and custom error classes.
 import inspect
 from pathlib import Path
 from types import FrameType
-from typing import NoReturn
+from typing import NoReturn, cast
 
 from qgis.core import Qgis, QgsMessageLog, QgsVectorLayer
 from qgis.PyQt.QtCore import QCoreApplication
@@ -14,11 +14,22 @@ from qgis.PyQt.QtCore import QCoreApplication
 from .constants import Names, NewPointLayerFields
 
 LOG_TAG: str = "Plugin: DHN"
+
+
+class _Levels:
+    Info: Qgis.MessageLevel = cast("Qgis.MessageLevel", Qgis.MessageLevel.Info)
+    Warning: Qgis.MessageLevel = cast("Qgis.MessageLevel", Qgis.MessageLevel.Warning)
+    Critical: Qgis.MessageLevel = cast("Qgis.MessageLevel", Qgis.MessageLevel.Critical)
+    Success: Qgis.MessageLevel = cast("Qgis.MessageLevel", Qgis.MessageLevel.Success)
+
+
+lvl = _Levels()
+
 LEVEL_ICON: dict[Qgis.MessageLevel, str] = {
-    Qgis.Success: "🎉",
-    Qgis.Info: "💡",
-    Qgis.Warning: "💥",
-    Qgis.Critical: "💀",
+    lvl.Success: "🎉",
+    lvl.Info: "💡",
+    lvl.Warning: "💥",
+    lvl.Critical: "💀",
 }
 
 
@@ -46,7 +57,7 @@ def file_line(frame: FrameType | None) -> str:
 
 def log_debug(
     message: str,
-    level: Qgis.MessageLevel = Qgis.Info,
+    level: Qgis.MessageLevel = lvl.Info,
     file_line_number: str | None = None,
     icon: str | None = None,
     prefix: str | None = None,
@@ -79,7 +90,7 @@ def log_debug(
 
 
 def show_message(
-    message: str, level: Qgis.MessageLevel = Qgis.Critical, duration: int = 0
+    message: str, level: Qgis.MessageLevel = lvl.Critical, duration: int = 0
 ) -> None:
     """Display a message in the QGIS message bar.
 
@@ -102,7 +113,7 @@ def show_message(
         )
     else:
         QgsMessageLog.logMessage(
-            f"{LEVEL_ICON[Qgis.Warning]} message bar not available! "
+            f"{LEVEL_ICON[lvl.Warning]} message bar not available! "
             f"→ Message not displayed in message bar."
         )
 
@@ -126,8 +137,8 @@ def raise_runtime_error(error_msg: str) -> NoReturn:
     """
     file_line_number: str = file_line(inspect.currentframe())
     error_msg = f"{error_msg}{file_line_number}"
-    log_msg: str = f"{LEVEL_ICON[Qgis.Critical]} {error_msg}"
-    QgsMessageLog.logMessage(f"{log_msg}", LOG_TAG, level=Qgis.Critical)
+    log_msg: str = f"{LEVEL_ICON[lvl.Critical]} {error_msg}"
+    QgsMessageLog.logMessage(f"{log_msg}", LOG_TAG, level=lvl.Critical)
 
     show_message(error_msg)
     raise CustomRuntimeError(error_msg)
@@ -143,10 +154,10 @@ def raise_user_error(error_msg: str) -> NoReturn:
         CustomUserError: The raised exception with the error message.
     """
     file_line_number: str = file_line(inspect.currentframe())
-    log_msg: str = f"{LEVEL_ICON[Qgis.Warning]} {error_msg}{file_line_number}"
-    QgsMessageLog.logMessage(f"{log_msg}", LOG_TAG, level=Qgis.Warning)
+    log_msg: str = f"{LEVEL_ICON[lvl.Warning]} {error_msg}{file_line_number}"
+    QgsMessageLog.logMessage(f"{log_msg}", LOG_TAG, level=lvl.Warning)
 
-    show_message(error_msg, level=Qgis.Warning)
+    show_message(error_msg, level=lvl.Warning)
     raise CustomUserError(error_msg)
 
 
@@ -194,19 +205,19 @@ def create_summary_message(
     # fmt: on
 
     if type_counts is None:
-        log_debug("Type field not found in new layer.", Qgis.Warning)
+        log_debug("Type field not found in new layer.", lvl.Warning)
         # fmt: off
         fail_field: str = QCoreApplication.translate("summary", "Type field not found in new layer.") 
         # fmt: on
         completed_message: str = (
-            f"{base_message} ({LEVEL_ICON[Qgis.Warning]} {fail_field})"
+            f"{base_message} ({LEVEL_ICON[lvl.Warning]} {fail_field})"
         )
     elif not type_counts:
-        log_debug("Failed to get type counts from new layer.", Qgis.Warning)
+        log_debug("Failed to get type counts from new layer.", lvl.Warning)
         # fmt: off
         fail_counts: str = QCoreApplication.translate("summary", "Failed to get type counts from new layer.")  
         # fmt: on
-        completed_message = f"{base_message} ({LEVEL_ICON[Qgis.Warning]} {fail_counts})"
+        completed_message = f"{base_message} ({LEVEL_ICON[lvl.Warning]} {fail_counts})"
 
     else:
         found_parts: list[str] = [

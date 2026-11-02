@@ -6,7 +6,6 @@ This module contains the LineMerger class for merging line features.
 from typing import NamedTuple
 
 from qgis.core import (
-    Qgis,
     QgsFeature,
     QgsFields,
     QgsGeometry,
@@ -23,7 +22,7 @@ from .constants import (
     PipeType,
 )
 from .graph_definitions import Node
-from .logs_and_errors import log_debug
+from .logs_and_errors import log_debug, lvl
 from .vector_analysis_tools import FieldNames
 
 
@@ -187,7 +186,7 @@ class LineMerger:
         log_debug(
             f"Merged {len(graph_struct.edges)} segments into "
             f"{len(merged_features)} features.",
-            Qgis.Success,
+            lvl.Success,
         )
         return merged_features
 

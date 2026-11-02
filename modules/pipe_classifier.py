@@ -7,7 +7,6 @@ identifying pipes that connect buildings to the main network.
 from typing import TYPE_CHECKING
 
 from qgis.core import (
-    Qgis,
     QgsFeature,
     QgsFeatureRequest,
     QgsGeometry,
@@ -24,7 +23,7 @@ from .constants import (
     Numbers,
     PipeType,
 )
-from .logs_and_errors import log_debug
+from .logs_and_errors import log_debug, lvl
 from .network_numbering import NetworkNumberer
 from .vector_analysis_tools import VectorAnalysisTools
 
@@ -100,7 +99,7 @@ class PipeClassifier:
         field_name: str = NewLineLayerFields.type.field_name
         idx: int = self.pipe_layer.fields().lookupField(field_name)
         if idx == -1:
-            log_debug(f"Field {field_name} not found in pipe layer.", Qgis.Warning)
+            log_debug(f"Field {field_name} not found in pipe layer.", lvl.Warning)
             return
 
         self.pipe_layer.startEditing()
@@ -110,7 +109,7 @@ class PipeClassifier:
         if self.pipe_layer.commitChanges():
             log_debug(f"Marked {len(pipes_to_mark)} pipes as house connections.")
         else:
-            log_debug("Failed to commit changes to pipe layer.", Qgis.Critical)
+            log_debug("Failed to commit changes to pipe layer.", lvl.Critical)
 
         # 3. Process Network Numbering (Branches, Designations)
         NetworkNumberer(self.pipe_layer, self.point_layer).run()

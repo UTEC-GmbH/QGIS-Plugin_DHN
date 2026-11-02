@@ -14,7 +14,7 @@ qgisMaximumVersion=4.99
 author=Florian Ludwig
 email=devalue-scope-drum@duck.com
 icon=resources/icons/main_icon.svg
-download_url_base=file:////dc1/netz$/Software/QGIS_Plugins_UTEC
+download_url_base=https://utec-gmbh.github.io/QGIS-Plugin-Releases
 
 
 [release]

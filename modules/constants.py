@@ -3,10 +3,11 @@
 This module contains constant values.
 """
 
-from collections.abc import Callable
+from __future__ import annotations
+
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
 from qgis.core import QgsApplication, QgsSvgCache
 from qgis.PyQt.QtCore import QCoreApplication
@@ -16,23 +17,29 @@ from qgis.PyQt.QtGui import QColor, QIcon, QPixmap
 from .context import PluginContext
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
+    from qgis.PyQt.QtCore import QVariant
+
+    FieldDataType = Qmt.Type | QVariant.Type
+else:
+    FieldDataType = int
 
 
 if PluginContext.is_qt6():
-    QMT_Map = Qmt.Type.QVariantMap
-    QMT_List = Qmt.Type.QVariantList
-    QMT_StringList = Qmt.Type.QStringList  # Qt6 has QStringList in Type
-    QMT_String = Qmt.Type.QString
-    QMT_Int = Qmt.Type.Int
-    QMT_Double = Qmt.Type.Double
+    QMT_Map: FieldDataType = cast("FieldDataType", Qmt.Type.QVariantMap)
+    QMT_List: FieldDataType = cast("FieldDataType", Qmt.Type.QVariantList)
+    QMT_StringList: FieldDataType = cast("FieldDataType", Qmt.Type.QStringList)
+    QMT_String: FieldDataType = cast("FieldDataType", Qmt.Type.QString)
+    QMT_Int: FieldDataType = cast("FieldDataType", Qmt.Type.Int)
+    QMT_Double: FieldDataType = cast("FieldDataType", Qmt.Type.Double)
 else:
-    QMT_Map = Qmt.QVariantMap
-    QMT_List = Qmt.QVariantList
-    QMT_StringList = Qmt.QStringList
-    QMT_String = Qmt.QString
-    QMT_Int = Qmt.Int
-    QMT_Double = Qmt.Double
+    QMT_Map: FieldDataType = cast("FieldDataType", Qmt.QVariantMap)
+    QMT_List: FieldDataType = cast("FieldDataType", Qmt.QVariantList)
+    QMT_StringList: FieldDataType = cast("FieldDataType", Qmt.QStringList)
+    QMT_String: FieldDataType = cast("FieldDataType", Qmt.QString)
+    QMT_Int: FieldDataType = cast("FieldDataType", Qmt.Int)
+    QMT_Double: FieldDataType = cast("FieldDataType", Qmt.Double)
 
 PROBLEMATIC_FIELD_TYPES: list = [QMT_Map, QMT_List, QMT_StringList]
 
@@ -363,7 +370,7 @@ class NewPointLayerFields(Enum):
         QMT_String,
     )
 
-    def __init__(self, display_name: str, q_type: Qmt) -> None:
+    def __init__(self, display_name: str, q_type: FieldDataType) -> None:
         """Initialize the enum member.
 
         Args:
@@ -371,7 +378,7 @@ class NewPointLayerFields(Enum):
             q_type: The QMetaType of the field data.
         """
         self._display_name: str = display_name
-        self._q_type: Qmt = q_type
+        self._q_type: FieldDataType = q_type
 
     @property
     def field_name(self) -> str:
@@ -379,7 +386,7 @@ class NewPointLayerFields(Enum):
         return QCoreApplication.translate("cont_PointLayerFields", self._display_name)
 
     @property
-    def data_type(self) -> Qmt:
+    def data_type(self) -> FieldDataType:
         """The QVariant type of the field."""
         return self._q_type
 
@@ -427,7 +434,7 @@ class NewLineLayerFields(Enum):
         QMT_String,
     )
 
-    def __init__(self, display_name: str, q_type: Qmt) -> None:
+    def __init__(self, display_name: str, q_type: FieldDataType) -> None:
         """Initialize the enum member.
 
         Args:
@@ -435,7 +442,7 @@ class NewLineLayerFields(Enum):
             q_type: The QMetaType of the field data.
         """
         self._display_name: str = display_name
-        self._q_type: Qmt = q_type
+        self._q_type: FieldDataType = q_type
 
     @property
     def field_name(self) -> str:
@@ -443,6 +450,6 @@ class NewLineLayerFields(Enum):
         return QCoreApplication.translate("cont_LineLayerFields", self._display_name)
 
     @property
-    def data_type(self) -> Qmt:
+    def data_type(self) -> FieldDataType:
         """The QVariant type of the field."""
         return self._q_type
