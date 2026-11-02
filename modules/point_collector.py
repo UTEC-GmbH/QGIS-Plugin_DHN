@@ -15,7 +15,7 @@ from qgis.core import (
 )
 from qgis.PyQt.QtWidgets import QProgressBar
 
-from .logs_and_errors import log_debug
+from .logs_and_errors import log_debug, lvl
 
 
 class PointCollector:
@@ -118,7 +118,7 @@ class PointCollector:
         log_debug(
             f"Collected {len(vertices)} vertices and "
             f"{len(intersections)} true intersections.",
-            Qgis.Success,
+            lvl.Success,
         )
         return {"vertices": vertices, "intersections": intersections}
 

@@ -8,8 +8,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from qgis.core import (
-    Qgis,
     QgsApplication,
+    QgsLayerTreeLayer,
     QgsLayerTreeNode,
     QgsMapLayer,
     QgsProject,
@@ -36,6 +36,7 @@ from .modules.logs_and_errors import (
     create_summary_message,
     get_layer_type_counts,
     log_debug,
+    lvl,
     raise_runtime_error,
     raise_user_error,
     show_message,
@@ -78,7 +79,7 @@ class DHN(QObject):
             try:
                 self.plugin_name = config.get("general", "name")
             except (configparser.NoSectionError, configparser.NoOptionError):
-                log_debug("Could not read name from metadata.txt", Qgis.Warning)
+                log_debug("Could not read name from metadata.txt", lvl.Warning)
 
         self.menu: str = self.plugin_name
 
@@ -87,7 +88,7 @@ class DHN(QObject):
         translator_path: Path = self.plugin_dir / "i18n" / f"{locale}.qm"
 
         if not translator_path.exists():
-            log_debug(f"Translator not found in: {translator_path}", Qgis.Warning)
+            log_debug(f"Translator not found in: {translator_path}", lvl.Warning)
         else:
             self.translator = QTranslator()
             if self.translator is not None and self.translator.load(
@@ -95,9 +96,9 @@ class DHN(QObject):
             ):
                 QCoreApplication.installTranslator(self.translator)
             else:
-                log_debug("Translator could not be installed.", Qgis.Warning)
+                log_debug("Translator could not be installed.", lvl.Warning)
 
-    def add_action(  # noqa: PLR0913 # pylint: disable=too-many-arguments,too-many-positional-arguments
+    def add_action(  # noqa: PLR0913, PLR0917
         self,
         icon: QIcon,
         button_text: str,
@@ -269,15 +270,18 @@ class DHN(QObject):
         if self.msg_bar:
             progress_widget = self.msg_bar.createMessage(initial_message)
             if progress_widget:
-                if PluginContext.is_qt6():
-                    alignment = (
-                        Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
-                    )
-                else:
-                    alignment = Qt.AlignLeft | Qt.AlignVCenter
-                progress_bar.setAlignment(alignment)
+                # if PluginContext.is_qt6():
+                #     alignment = (
+                #         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+                #     )
+                # else:
+                #     alignment = Qt.AlignLeft | Qt.AlignVCenter
+                # progress_bar.setAlignment(alignment)
+                progress_bar.setAlignment(
+                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter  # pyrefly: ignore[bad-argument-type]
+                )
                 progress_widget.layout().addWidget(progress_bar)
-                self.msg_bar.pushWidget(progress_widget, Qgis.Info)
+                self.msg_bar.pushWidget(progress_widget, lvl.Info)
 
         def update_text(new_message: str) -> None:
             """Update the text of the progress widget."""
@@ -361,11 +365,11 @@ class DHN(QObject):
 
                 log_debug(
                     summary_single_line,
-                    level=Qgis.Success,
+                    level=lvl.Success,
                     file_line_number="✨✨✨",
                     icon="✨✨✨",
                 )
-                show_message(summary_single_line, level=Qgis.Success, duration=30)
+                show_message(summary_single_line, level=lvl.Success, duration=30)
 
                 metadata: QgsLayerMetadata = new_layer.metadata()
                 metadata.setAbstract(summary_multi_line)
@@ -389,12 +393,10 @@ class DHN(QObject):
 
             log_debug(
                 f"Unexpected error: {e!s}",
-                level=Qgis.Critical,
+                level=lvl.Critical,
                 file_line_number=file_line_info,
             )
-            show_message(
-                f"Unexpected error: {e!s}{file_line_info}", level=Qgis.Critical
-            )
+            show_message(f"Unexpected error: {e!s}{file_line_info}", level=lvl.Critical)
             return
 
         finally:
@@ -411,7 +413,7 @@ class DHN(QObject):
                 except RuntimeError:
                     log_debug(
                         "Could not remove reprojected layer (already deleted?)",
-                        Qgis.Warning,
+                        lvl.Warning,
                     )
 
     def rerun_excel_output(self) -> None:
@@ -439,6 +441,12 @@ class DHN(QObject):
                 # fmt: on
                 raise_user_error(ue_msg)
 
+            if not isinstance(selected_nodes[0], QgsLayerTreeLayer):
+                # fmt: off
+                ue_msg = QCoreApplication.translate("UserError", "The selected node is not a layer.")
+                # fmt: on
+                raise_user_error(ue_msg)
+
             result_layer = selected_nodes[0].layer()
             if not isinstance(
                 result_layer, QgsVectorLayer
@@ -461,15 +469,19 @@ class DHN(QObject):
                 raise_runtime_error(
                     "Could not find the corresponding pipe layer for export."
                 )
-
-            pipe_layer: QgsVectorLayer = pipe_layers[0]
+            if isinstance(pipe_layers[0], QgsVectorLayer):
+                pipe_layer: QgsVectorLayer = pipe_layers[0]
+            else:
+                raise_runtime_error(
+                    "The corresponding pipe layer is not a vector layer."
+                )
 
             # 3. Export the results.
             ExcelExporter().export_results(result_layer, pipe_layer)
 
             show_message(
                 QCoreApplication.translate("summary", "Excel export has been updated."),
-                level=Qgis.Success,
+                level=lvl.Success,
                 duration=10,
             )
 
@@ -480,5 +492,5 @@ class DHN(QObject):
             log_debug(f"An unexpected error occurred during Excel export: {e!s}")
             show_message(
                 f"An unexpected error occurred during Excel export: {e!s}",
-                level=Qgis.Critical,
+                level=lvl.Critical,
             )

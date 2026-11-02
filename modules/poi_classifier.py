@@ -7,7 +7,6 @@ features in the selected layer.
 from collections.abc import Callable
 
 from qgis.core import (
-    Qgis,
     QgsFeature,
     QgsGeometry,
     QgsPointXY,
@@ -18,7 +17,7 @@ from qgis.PyQt.QtWidgets import QProgressBar
 
 from .constants import Numbers
 from .feature_creator import FeatureCreator
-from .logs_and_errors import log_debug, raise_runtime_error
+from .logs_and_errors import log_debug, lvl, raise_runtime_error
 from .point_collector import PointCollector
 from .t_intersection_analyzer import TIntersectionAnalyzer
 
@@ -101,7 +100,7 @@ class PointOfInterestClassifier(FeatureCreator):
         if not self.new_layer.commitChanges():
             raise_runtime_error("Failed to commit changes to the new layer.")
 
-        log_debug("Feature search completed.", Qgis.Success)
+        log_debug("Feature search completed.", lvl.Success)
         return created_count
 
     def _handle_two_intersections(

@@ -19,7 +19,7 @@ from qgis.core import (
 )
 
 from .constants import Names, NewPointLayerFields, Numbers
-from .logs_and_errors import log_debug
+from .logs_and_errors import log_debug, lvl
 
 if TYPE_CHECKING:
     from qgis.core import QgsRectangle
@@ -58,7 +58,7 @@ class VectorAnalysisTools:
         self.selected_layer_index: QgsSpatialIndex = QgsSpatialIndex(
             selected_layer.getFeatures(request)
         )
-        log_debug("Spatial index created.", Qgis.Success)
+        log_debug("Spatial index created.", lvl.Success)
 
         fields: FieldNames = self.find_layer_fields(selected_layer)
         self.dim_field_name: str | None = fields.dim
@@ -86,12 +86,12 @@ class VectorAnalysisTools:
         load_name: str | None = _find(Names.sel_layer_field_load)
 
         if dim_name:
-            log_debug(f"Found dimension field: '{dim_name}'", Qgis.Success)
+            log_debug(f"Found dimension field: '{dim_name}'", lvl.Success)
         else:
-            log_debug("No dimension field found in the selected layer.", Qgis.Warning)
+            log_debug("No dimension field found in the selected layer.", lvl.Warning)
 
         if load_name:
-            log_debug(f"Found load field: '{load_name}'", Qgis.Success)
+            log_debug(f"Found load field: '{load_name}'", lvl.Success)
 
         return FieldNames(dim_name, load_name)
 
@@ -107,7 +107,7 @@ class VectorAnalysisTools:
         """
         data_provider: QgsVectorDataProvider | None = self.new_layer.dataProvider()
         if data_provider is None:
-            log_debug("Data provider is None for new_layer.", Qgis.Critical)
+            log_debug("Data provider is None for new_layer.", lvl.Critical)
             return False
 
         layer_fields: QgsFields = self.new_layer.fields()
@@ -238,7 +238,7 @@ class VectorAnalysisTools:
         """
         # Check for coincident points which would make angle calculation invalid.
         if p2.compare(p1, Numbers.tiny_number) or p2.compare(p3, Numbers.tiny_number):
-            log_debug("Coincident points found for angle calculation.", Qgis.Warning)
+            log_debug("Coincident points found for angle calculation.", lvl.Warning)
             # Coincident points mean the lines are on top of each other (a U-turn).
             return Numbers.circle_semi
 
@@ -330,7 +330,7 @@ class VectorAnalysisTools:
             log_debug(
                 f"Point {point.asWkt()} is not on the line geometry of "
                 f"feature {feature.attribute('original_fid')}.",
-                Qgis.Warning,
+                lvl.Warning,
             )
             return None, None
 
@@ -343,7 +343,7 @@ class VectorAnalysisTools:
             log_debug(
                 f"Invalid vertex index for feature "
                 f"'{feature.attribute('original_fid')}'.",
-                Qgis.Warning,
+                lvl.Warning,
             )
             return None, None
 

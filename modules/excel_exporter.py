@@ -7,7 +7,6 @@ import shutil
 from pathlib import Path
 
 from qgis.core import (
-    Qgis,
     QgsCoordinateTransformContext,
     QgsVectorFileWriter,
     QgsVectorLayer,
@@ -16,7 +15,7 @@ from qgis.PyQt.QtCore import QCoreApplication
 
 from .constants import Names
 from .context import PluginContext
-from .logs_and_errors import log_debug, raise_runtime_error
+from .logs_and_errors import log_debug, lvl, raise_runtime_error
 
 
 class ExcelExporter:
@@ -93,9 +92,9 @@ class ExcelExporter:
 
         log_debug(f"Exporting features to plugin output file (sheet: {sheet_name})...")
         options = QgsVectorFileWriter.SaveVectorOptions()
-        options.driverName = "XLSX"
-        options.datasourceOptions = ["GEOMETRY=NO"]
-        options.layerName = sheet_name
+        options.driverName = "XLSX"  # pyrefly: ignore[bad-assignment]
+        options.datasourceOptions = ["GEOMETRY=NO"]  # pyrefly: ignore[bad-assignment]
+        options.layerName = sheet_name  # pyrefly: ignore[bad-assignment]
 
         if output_path.exists():
             options.actionOnExistingFile = (
@@ -111,7 +110,7 @@ class ExcelExporter:
         )
 
         if write_layer[0] == QgsVectorFileWriter.WriterError.NoError:
-            log_debug(f"Excel file saved to \n{output_path}", Qgis.Success)
+            log_debug(f"Excel file saved to \n{output_path}", lvl.Success)
         else:
             raise_runtime_error(
                 f"Could not write to file \n{output_path}\n({write_layer[1]})"

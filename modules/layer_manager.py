@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from qgis.core import (
-    Qgis,
     QgsCategorizedSymbolRenderer,
     QgsCoordinateReferenceSystem,
     QgsCoordinateTransform,
@@ -21,6 +20,7 @@ from qgis.core import (
     QgsFields,
     QgsLayerTree,
     QgsLayerTreeGroup,
+    QgsLayerTreeLayer,
     QgsLayerTreeNode,
     QgsProject,
     QgsRandomColorRamp,
@@ -43,7 +43,7 @@ from .constants import (
 )
 from .context import PluginContext
 from .line_merger import LineMerger
-from .logs_and_errors import log_debug, raise_runtime_error, raise_user_error
+from .logs_and_errors import log_debug, lvl, raise_runtime_error, raise_user_error
 from .vector_analysis_tools import FieldNames, VectorAnalysisTools
 
 if TYPE_CHECKING:
@@ -248,9 +248,7 @@ class LayerManager:
                         new_feat.setAttribute(field.name(), feat.attribute(idx))
                 new_features.append(new_feat)
             else:
-                log_debug(
-                    f"Feature {feat.id()} could not be reprojected.", Qgis.Warning
-                )
+                log_debug(f"Feature {feat.id()} could not be reprojected.", lvl.Warning)
 
         reprojected_layer.startEditing()
         reprojected_layer.addFeatures(new_features)
@@ -287,12 +285,17 @@ class LayerManager:
             # fmt: on
 
         selected_node: QgsLayerTreeNode = next(iter(selected_nodes))
-        if not selected_node.layer():
+        if not isinstance(selected_node, QgsLayerTreeLayer):
             # fmt: off
             raise_user_error(QCoreApplication.translate("UserError", "Selected node is not a layer."))  # noqa: E501
             # fmt: on
 
         selected_layer = selected_node.layer()
+        if selected_layer is None:
+            # fmt: off
+            raise_user_error(QCoreApplication.translate("UserError", "Selected node is not a layer."))  # noqa: E501
+            # fmt: on
+
         if not isinstance(selected_layer, QgsVectorLayer):
             # fmt: off
             raise_user_error(QCoreApplication.translate("UserError", "Selected layer is not a vector layer."))  # noqa: E501
@@ -329,7 +332,7 @@ class LayerManager:
 
         log_debug(
             f"Created point layer '{gpkg_layer.name()}' in GeoPackage.",
-            Qgis.Success,
+            lvl.Success,
         )
         self.set_point_layer_style(gpkg_layer)
 
@@ -379,7 +382,7 @@ class LayerManager:
 
         log_debug(
             f"Created pipe layer copy '{gpkg_layer.name()}' in GeoPackage.",
-            Qgis.Success,
+            lvl.Success,
         )
         self.set_line_layer_style(gpkg_layer)
 
@@ -429,12 +432,16 @@ class LayerManager:
             self.project.removeMapLayers([layer.id() for layer in existing])
 
         options = QgsVectorFileWriter.SaveVectorOptions()
-        options.driverName = "GPKG"
-        options.layerName = new_layer_name
+        options.driverName = "GPKG"  # pyrefly: ignore[bad-assignment]
+        options.layerName = new_layer_name  # pyrefly: ignore[bad-assignment]
         if gpkg_path.exists():
-            options.actionOnExistingFile = QgsVectorFileWriter.CreateOrOverwriteLayer
+            options.actionOnExistingFile = (
+                QgsVectorFileWriter.ActionOnExistingFile.CreateOrOverwriteLayer
+            )
         else:
-            options.actionOnExistingFile = QgsVectorFileWriter.CreateOrOverwriteFile
+            options.actionOnExistingFile = (
+                QgsVectorFileWriter.ActionOnExistingFile.CreateOrOverwriteFile
+            )
 
         error: tuple = QgsVectorFileWriter.writeAsVectorFormatV3(
             memory_layer,
@@ -484,7 +491,7 @@ class LayerManager:
         log_debug(
             f"Temporary point layer with {len(temp_layer.fields())} fields "
             f" and {temp_layer.featureCount()} features created.",
-            Qgis.Success,
+            lvl.Success,
         )
 
         return temp_layer
@@ -518,7 +525,10 @@ class LayerManager:
             )
 
         # Assume the first found layer is the correct one
-        source_layer: QgsVectorLayer = source_layers[0]
+        if isinstance(source_layers[0], QgsVectorLayer):
+            source_layer: QgsVectorLayer = source_layers[0]
+        else:
+            raise_runtime_error("Found layer is not a vector layer.")
 
         # Reproject and return it
         return self.reproject_layer_to_project_crs(source_layer)
@@ -599,7 +609,7 @@ class LayerManager:
         layer.loadNamedStyle(str(qml_path))
 
         layer.triggerRepaint()
-        log_debug("Layer style set.", Qgis.Success)
+        log_debug("Layer style set.", lvl.Success)
 
     def set_line_layer_style(self, layer: QgsVectorLayer) -> None:
         """Set the layer style from a QML file for the line layer.
@@ -645,4 +655,4 @@ class LayerManager:
                 layer_tree.refreshLayerSymbology(layer.id())
 
         layer.triggerRepaint()
-        log_debug("Line layer style set.", Qgis.Success)
+        log_debug("Line layer style set.", lvl.Success)
