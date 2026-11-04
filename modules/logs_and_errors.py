@@ -13,7 +13,7 @@ from qgis.PyQt.QtCore import QCoreApplication
 
 from .constants import Names, NewPointLayerFields
 
-LOG_TAG: str = "Plugin: DHN"
+LOG_TAG: str = "Plugin: UTEC DHN"
 
 
 class _Levels:
