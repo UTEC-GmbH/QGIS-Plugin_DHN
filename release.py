@@ -5,9 +5,9 @@ packages the plugin, and updates the separate GitHub Pages release repository.
 
 To use:
 1. Update the 'version' in metadata.txt.
-2. Run this script from the OSGeo4W Shell:
-   python release.py
-   Optionally, pass --output-dir to use another repository clone.
+2. Run this script from the OSGeo4W Shell. With no arguments, an interactive
+   menu lets you choose the release mode. Command-line options are also
+   available: --output-dir, --commit, and --push.
 """
 
 import argparse
@@ -609,7 +609,157 @@ def compile_translations(metadata: PluginMetadata) -> None:
             raise ReleaseScriptError(msg) from e
 
 
-def run_release_process(output_dir: Path) -> None:
+def _run_git_command(
+    command: list[str],
+    cwd: Path,
+    *,
+    check: bool = True,
+) -> subprocess.CompletedProcess[str]:
+    """Run a Git command and report failures as release errors."""
+    try:
+        result = subprocess.run(  # noqa: S603
+            ["git", *command],  # noqa: S607
+            cwd=cwd,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError as e:
+        msg = "Git was not found. Install Git or add it to PATH to commit releases."
+        raise ReleaseScriptError(msg) from e
+    except OSError as e:
+        msg = f"Could not run Git in '{cwd}': {e}"
+        raise ReleaseScriptError(msg) from e
+
+    if check and result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip()
+        msg = f"Git command 'git {' '.join(command)}' failed."
+        if detail:
+            msg = f"{msg} {detail}"
+        raise ReleaseScriptError(msg)
+
+    return result
+
+
+def _get_git_repository_paths(output_dir: Path) -> tuple[Path, Path]:
+    """Return the repository root and output path relative to it."""
+    output_dir = output_dir.resolve()
+    if not output_dir.is_dir():
+        msg = f"Release output directory does not exist: {output_dir}"
+        raise ReleaseScriptError(msg)
+
+    result = _run_git_command(
+        ["rev-parse", "--show-toplevel"],
+        output_dir,
+        check=False,
+    )
+    if result.returncode != 0:
+        msg = f"Release output directory '{output_dir}' is not inside a Git repository."
+        raise ReleaseScriptError(msg)
+
+    repository_root = Path(result.stdout.strip()).resolve()
+    try:
+        output_relative_path = output_dir.relative_to(repository_root)
+    except ValueError as e:
+        msg = (
+            f"Release output directory '{output_dir}' is not inside its Git "
+            f"repository '{repository_root}'."
+        )
+        raise ReleaseScriptError(msg) from e
+
+    return repository_root, output_relative_path
+
+
+def push_release_changes(output_dir: Path) -> None:
+    """Push the current branch to its configured upstream."""
+    repository_root, _ = _get_git_repository_paths(output_dir)
+    branch_result = _run_git_command(
+        ["symbolic-ref", "--quiet", "--short", "HEAD"],
+        repository_root,
+        check=False,
+    )
+    branch = branch_result.stdout.strip()
+    if branch_result.returncode != 0 or not branch:
+        msg = "Cannot push release: the release repository is in a detached HEAD state."
+        raise ReleaseScriptError(msg)
+
+    upstream_result = _run_git_command(
+        [
+            "for-each-ref",
+            "--format=%(upstream:remotename)%00%(upstream:remoteref)",
+            f"refs/heads/{branch}",
+        ],
+        repository_root,
+    )
+    upstream = upstream_result.stdout.strip()
+    if not upstream or "\0" not in upstream:
+        msg = (
+            f"Cannot push release branch '{branch}': it has no configured upstream. "
+            "Set one with 'git push --set-upstream <remote> <branch>'."
+        )
+        raise ReleaseScriptError(msg)
+
+    remote, remote_ref = upstream.split("\0", 1)
+    if not remote or remote == "." or not remote_ref:
+        msg = f"Cannot determine a push destination for release branch '{branch}'."
+        raise ReleaseScriptError(msg)
+
+    logger.info("\n▶️ Pushing release branch '%s' to '%s'...", branch, remote)
+    _run_git_command(["push", remote, f"HEAD:{remote_ref}"], repository_root)
+    logger.info("✅ Pushed release branch '%s' to '%s'.", branch, remote)
+
+
+def commit_release_changes(
+    metadata: PluginMetadata,
+    output_dir: Path,
+    *,
+    push: bool = False,
+) -> None:
+    """Commit only generated files and optionally push the current branch."""
+    repository_root, output_relative_path = _get_git_repository_paths(output_dir)
+
+    zip_name = f"{metadata['name'].replace(' ', '_')}.zip"
+    release_files = [
+        (output_relative_path / zip_name).as_posix(),
+        (output_relative_path / "plugins.xml").as_posix(),
+    ]
+
+    logger.info("\n▶️ Committing generated release files...")
+    _run_git_command(["add", "--", *release_files], repository_root)
+
+    staged_changes = _run_git_command(
+        ["diff", "--cached", "--quiet", "--", *release_files],
+        repository_root,
+        check=False,
+    )
+    if staged_changes.returncode == 0:
+        logger.info("No changes to generated release files; skipping commit.")
+        if push:
+            push_release_changes(output_dir)
+        return
+    if staged_changes.returncode != 1:
+        detail = staged_changes.stderr.strip()
+        msg = "Could not check staged release files for changes."
+        if detail:
+            msg = f"{msg} {detail}"
+        raise ReleaseScriptError(msg)
+
+    commit_message = f"Release {metadata['name']} {metadata['version']}"
+    _run_git_command(
+        ["commit", "--only", "-m", commit_message, "--", *release_files],
+        repository_root,
+    )
+    logger.info("✅ Committed generated release files: %s", commit_message)
+    if push:
+        push_release_changes(output_dir)
+
+
+def run_release_process(
+    output_dir: Path,
+    *,
+    commit: bool = False,
+    push: bool = False,
+) -> None:
     """Automate the plugin release process.
 
     This main function orchestrates the entire release process:
@@ -617,6 +767,7 @@ def run_release_process(output_dir: Path) -> None:
     2. Compiles translations.
     3. Packages the plugin into the local repository directory.
     4. Updates plugins.xml with the public download URL.
+    5. Optionally commits the generated files and pushes the current branch.
 
     Raises:
         ReleaseScriptError: If any step in the release process fails.
@@ -639,12 +790,47 @@ def run_release_process(output_dir: Path) -> None:
     compile_translations(metadata)
     package_plugin(metadata, output_dir)
     update_repository_file(metadata, output_dir)
+    if commit or push:
+        commit_release_changes(metadata, output_dir, push=push)
 
     logger.info("\n🎉 --- Release process complete! --- 🎉")
     logger.info(
         "✅ Plugin package and repository file are ready in: %s",
         output_dir,
     )
+
+
+def _prompt_for_arguments() -> list[str] | None:
+    """Display the release menu and return the selected command-line arguments."""
+    while True:
+        print(
+            "\nSelect a release option:"
+            "\n  1. Run release (default output directory)"
+            "\n  2. Run release with a custom output directory"
+            "\n  3. Run release and commit"
+            "\n  4. Run release, commit, and push"
+            "\n  Q. Quit"
+        )
+        choice = input("Choice: ").strip().lower()
+
+        if choice == "1":
+            return []
+        if choice == "2":
+            while True:
+                output_dir = input("Output directory: ").strip()
+                if output_dir:
+                    if output_dir.startswith('"') and output_dir.endswith('"'):
+                        output_dir = output_dir[1:-1]
+                    return ["--output-dir", output_dir]
+                print("Please enter an output directory.")
+        if choice == "3":
+            return ["--commit"]
+        if choice == "4":
+            return ["--push"]
+        if choice in {"q", "quit"}:
+            return None
+
+        print("Invalid choice. Enter 1, 2, 3, 4, or Q.")
 
 
 def main() -> int:
@@ -663,11 +849,27 @@ def main() -> int:
         default=Path(r"C:\Github_Repos\QGIS-Plugin-Releases\docs"),
         help="Local docs directory of the GitHub Pages release repository",
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--commit",
+        action="store_true",
+        help="Commit the generated ZIP and plugins.xml in the release repository",
+    )
+    parser.add_argument(
+        "--push",
+        action="store_true",
+        help="Commit generated files and push the release branch to its upstream",
+    )
+    cli_arguments = sys.argv[1:]
+    if not cli_arguments:
+        selected_arguments = _prompt_for_arguments()
+        if selected_arguments is None:
+            return 0
+        cli_arguments = selected_arguments
+    args = parser.parse_args(cli_arguments)
 
     setup_logging()
     try:
-        run_release_process(args.output_dir)
+        run_release_process(args.output_dir, commit=args.commit, push=args.push)
     except ReleaseScriptError as e:
         logger.critical("❌ A critical error occurred: %s", e)
         return 1

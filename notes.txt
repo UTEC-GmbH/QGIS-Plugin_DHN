@@ -41,7 +41,18 @@ Notes:
        
       `cd **PATH_TO_PLUGIN**`
       `python release.py`
+
+      Running without arguments displays a menu for the default release,
+      choosing a custom output directory, committing, or pushing.
        
       This script will update `plugins.xml` and package the new .zip file.
       The .zip file and plugins.xml will be saved to the server 
       (see `download_url_base` in metadata.txt).
+
+      To automatically create a local Git commit for those generated files,
+      run `python release.py --commit` instead. This commits only the plugin
+      .zip file and `plugins.xml` in the release repository; it does not push.
+
+      To commit and push the release branch to its configured upstream, run
+      `python release.py --push`. This requires an upstream to be configured
+      for the current branch; it does not select or switch branches.
