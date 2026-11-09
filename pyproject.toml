@@ -43,6 +43,13 @@ search-path = [
 site-package-path = [
     'C:\OSGeo4W\apps\Python312\Lib\site-packages',
 ]
+[tool.pyrefly.errors]
+
+# PyQGIS SIP declarations lack types for many C++ attributes and overloads.
+missing-attribute = false
+bad-argument-type = false
+bad-assignment = false
+no-matching-overload = false
 
 [tool.pylint.main]
 extension-pkg-allow-list = [
