@@ -14,6 +14,7 @@ import argparse
 import configparser
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -616,9 +617,34 @@ def _run_git_command(
     check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
     """Run a Git command and report failures as release errors."""
+    git_executable = shutil.which("git")
+    if git_executable is None:
+        git_candidates = [
+            Path(os.environ.get("PROGRAMFILES", r"C:\Program Files"))
+            / "Git"
+            / "cmd"
+            / "git.exe",
+            Path(os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)"))
+            / "Git"
+            / "cmd"
+            / "git.exe",
+        ]
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        if local_app_data:
+            git_candidates.append(
+                Path(local_app_data) / "Programs" / "Git" / "cmd" / "git.exe"
+            )
+        git_executable = next(
+            (str(candidate) for candidate in git_candidates if candidate.is_file()),
+            None,
+        )
+    if git_executable is None:
+        msg = "Git was not found. Install Git or add it to PATH to commit releases."
+        raise ReleaseScriptError(msg)
+
     try:
         result = subprocess.run(  # noqa: S603
-            ["git", *command],  # noqa: S607
+            [git_executable, *command],
             cwd=cwd,
             check=False,
             capture_output=True,

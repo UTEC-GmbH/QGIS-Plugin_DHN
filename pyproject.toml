@@ -9,13 +9,8 @@ omit = ["tests/*"]
 
 [tool.ruff]
 line-length = 88
-
+extend-exclude = ["tests/**"]
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = [
-    "S101",  # Allow `assert` statements in tests
-    "D",     # Disable all pydocstyle rules for tests
-    "SLF001",# Allow access to private members in tests
-]
 "release.py" = [
     "T201",  # `print` found
 ]
@@ -34,6 +29,7 @@ extraPaths = [
 ]
 
 [tool.pyrefly]
+project-excludes = ["tests/**"]
 python-interpreter-path = ".venv/Scripts/python.exe"
 search-path = [
     ".",
