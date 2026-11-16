@@ -59,8 +59,7 @@ def raise_context_runtime_error(error_msg: str) -> NoReturn:
     QgsMessageLog.logMessage(
         message=f"💀 {error_msg}",
         tag="UTEC Plugin ERROR",
-        # pyrefly: ignore[bad-argument-type]
-        level=Qgis.MessageLevel.Critical,
+        level=Qgis.Critical,
         notifyUser=True,
     )
 
@@ -223,8 +222,8 @@ class PluginContext:
         """
         # QGIS_VERSION_INT is structured as MMmmpp (e.g., 31609 for 3.16.9).
         # Integer division by 10000 extracts the major version number.
-        # pyrefly: ignore[missing-attribute]
-        return Qgis.QGIS_VERSION_INT // 10000 >= 4  # noqa: PLR2004
+        qgis_4: int = 4
+        return qgis_4 <= Qgis.QGIS_VERSION_INT // 10000
 
     @staticmethod
     def is_qt6() -> bool:
@@ -233,4 +232,5 @@ class PluginContext:
         Returns:
             True if running on Qt 6 or newer, False otherwise.
         """
-        return int(QT_VERSION_STR.split(".")[0]) >= 6  # noqa: PLR2004
+        qgis_6: int = 6
+        return int(QT_VERSION_STR.split(".")[0]) >= qgis_6  
