@@ -19,6 +19,7 @@ from .context import PluginContext
 if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
+
     from qgis.PyQt.QtCore import QVariant
 
     FieldDataType = Qmt.Type | QVariant.Type
@@ -258,9 +259,8 @@ class Names:
     dim_prefix: str = "DN"
     separator: str = " / "
 
-    excel_dir: str = "UTEC"
-    excel_file_output: str = "plugin_output"
-    excel_file_template: str = "UTEC_DHN.xlsx"
+    excel_dir: str = "UTEC_Netzanalyse"
+    excel_file_output: str = "UTEC_Auswertung"
 
     # Mögliche Namen für die Spalte mit den Rohrdimensionen
     # in der Attributtabelle des alten (gewälten) Layers
@@ -294,11 +294,6 @@ class Names:
     def new_pipe_layer_suffix(self) -> str:
         """Return the suffix for the new pipe layer name."""
         return QCoreApplication.translate("cont_Names", " - Net")
-
-    @ClassProperty
-    def excel_file_summary(self) -> str:
-        """Return the summary sheet name."""
-        return QCoreApplication.translate("cont_Names", "UTEC_Network")
 
 
 @dataclass(frozen=True)

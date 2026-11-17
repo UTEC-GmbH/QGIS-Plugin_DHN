@@ -87,6 +87,29 @@
         <source>Pipe Runs</source>
         <translation>Leitungstrassen</translation>
     </message>
+    <message>
+        <location filename="../modules/excel_exporter.py" line="126"/>
+        <source>Summary</source>
+        <translation>Zusammenfassung</translation>
+    </message>
+    <message>
+        <location filename="../modules/excel_exporter.py" line="140"/>
+        <source>Count</source>
+        <translation>Anzahl</translation>
+    </message>
+    <message>
+        <source>Pipe run length</source>
+        <translation>Trassenlänge</translation>
+    </message>
+    <message>
+        <source>Amount</source>
+        <translation>Anzahl</translation>
+    </message>
+    <message>
+        <location filename="../modules/excel_exporter.py" line="151"/>
+        <source>Total</source>
+        <translation>Gesamtergebnis</translation>
+    </message>
 </context>
 <context>
     <name>cont_FittingType</name>
