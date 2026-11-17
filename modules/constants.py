@@ -361,6 +361,10 @@ class NewPointLayerFields(Enum):
         QT_TRANSLATE_NOOP("cont_PointLayerFields", "Load - Water"),
         QMT_Double,
     )
+    connected_fid = (
+        QT_TRANSLATE_NOOP("cont_PointLayerFields", "Connected Pipes (fid)"),
+        QMT_String,
+    )
     connected = (
         QT_TRANSLATE_NOOP("cont_PointLayerFields", "Connected Pipes"),
         QMT_String,

@@ -145,7 +145,7 @@ class VectorAnalysisTools:
             {feature.attribute("original_fid") for feature in connected_features}
         )
         attributes: dict = {
-            NewPointLayerFields.connected.field_name: Names.separator.join(
+            NewPointLayerFields.connected_fid.field_name: Names.separator.join(
                 str(id_int) or "???" for id_int in connected_ids
             )
         }

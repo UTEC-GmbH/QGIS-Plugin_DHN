@@ -19,6 +19,7 @@ from qgis.core import (
 
 from .constants import (
     FittingType,
+    Names,
     NewLineLayerFields,
     NewPointLayerFields,
     Numbers,
@@ -34,7 +35,7 @@ from .graph_definitions import (
     PipeInfo,
     TraversalContext,
 )
-from .logs_and_errors import log_debug
+from .logs_and_errors import log_debug, raise_runtime_error
 from .vector_analysis_tools import VectorAnalysisTools
 
 if TYPE_CHECKING:
@@ -89,6 +90,7 @@ class NetworkNumberer:
 
         # 5. Apply the calculated branch and designation numbering to the layers.
         self._apply_numbering(branches, node_hcs, main_graph.adjacency)
+        self._populate_connected_pipe_designations()
 
     def _build_main_pipe_graph(self) -> MainPipeGraph:
         """Build a graph representation of the main pipe network.
@@ -394,7 +396,7 @@ class NetworkNumberer:
                     for hc_fid in hcs:
                         num_str: str = f"{branch_id}-{counter:03d}"
                         self.point_layer.changeAttributeValue(
-                            hc_fid, idx_desig_pt, num_str
+                            hc_fid, idx_desig_pt, f"H{num_str}"
                         )
                         self._update_conn_pipe_name(hc_fid, f"a{num_str}", branch_id)
 
@@ -428,13 +430,92 @@ class NetworkNumberer:
                 for hc_fid in hcs:
                     num_str = f"{branch_id}-{counter:03d}"
                     self.point_layer.changeAttributeValue(
-                        hc_fid, idx_desig_pt, num_str
+                        hc_fid, idx_desig_pt, f"H{num_str}"
                     )
                     self._update_conn_pipe_name(hc_fid, f"a{num_str}", branch_id)
                     counter += 1
 
         self.pipe_layer.commitChanges()
         self.point_layer.commitChanges()
+
+    def _populate_connected_pipe_designations(self) -> None:
+        """Store the designations of pipes intersecting each point."""
+        connected_idx: int = self.point_layer.fields().lookupField(
+            NewPointLayerFields.connected.field_name
+        )
+        point_type_idx: int = self.point_layer.fields().lookupField(
+            NewPointLayerFields.type.field_name
+        )
+        point_designation_idx: int = self.point_layer.fields().lookupField(
+            NewPointLayerFields.designation.field_name
+        )
+        designation_idx: int = self.pipe_layer.fields().lookupField(
+            NewLineLayerFields.designation.field_name
+        )
+        if (
+            connected_idx == -1
+            or point_type_idx == -1
+            or point_designation_idx == -1
+            or designation_idx == -1
+        ):
+            raise_runtime_error(
+                "Could not find connected-pipe designation fields in result layers."
+            )
+
+        fitting_prefixes: dict[str, str] = {
+            FittingType.BEND.translated: "B",
+            FittingType.REDUCER.translated: "R",
+            FittingType.T_PIECE.translated: "T",
+            FittingType.QUESTIONABLE.translated: "F",
+        }
+
+        if not self.point_layer.isEditable() and not self.point_layer.startEditing():
+            raise_runtime_error(
+                "Failed to start editing the point layer "
+                "for connected-pipe designations."
+            )
+
+        for point_feature in self.point_layer.getFeatures():
+            geometry: QgsGeometry = point_feature.geometry()
+            if not geometry or geometry.isNull() or geometry.isEmpty():
+                continue
+
+            connected_pipes: list[QgsFeature] = self._get_pipes_at_point(
+                QgsPointXY(geometry.asPoint())
+            )
+            designations: list[str] = sorted(
+                {
+                    str(designation)
+                    for pipe in connected_pipes
+                    if (designation := pipe.attribute(designation_idx))
+                }
+            )
+            self.point_layer.changeAttributeValue(
+                point_feature.id(), connected_idx, Names.separator.join(designations)
+            )
+
+            prefix = fitting_prefixes.get(point_feature.attribute(point_type_idx))
+            if prefix:
+                numbered_designations: list[tuple[int, int, str]] = []
+                for designation in designations:
+                    branch, separator, number = designation[1:].partition("-")
+                    if separator and branch.isdecimal() and number.isdecimal():
+                        numbered_designations.append(
+                            (int(branch), int(number), designation[1:])
+                        )
+
+                if numbered_designations:
+                    lowest_designation = min(numbered_designations)[2]
+                    self.point_layer.changeAttributeValue(
+                        point_feature.id(),
+                        point_designation_idx,
+                        f"{prefix}{lowest_designation}",
+                    )
+
+        if not self.point_layer.commitChanges():
+            raise_runtime_error(
+                "Failed to commit connected-pipe designations to the point layer."
+            )
 
     def _get_conn_pipe_length(self, house_connection_fid: int) -> float:
         """Get the length of the connecting pipe for a given HC.
