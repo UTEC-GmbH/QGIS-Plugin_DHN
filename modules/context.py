@@ -178,9 +178,10 @@ class PluginContext:
         project: QgsProject = cls.project()
         project_path: str = project.fileName()
         if not project_path:
-            msg: str = QCoreApplication.translate(
-                "UserError", "Project is not saved. Please save the project first."
-            )
+            # fmt: off
+            # ruff: noqa: E501
+            msg: str = QCoreApplication.translate("UserError", "Project is not saved. Please save the project first.")
+            # fmt: on
             raise_context_runtime_error(msg)
 
         return Path(project_path)
@@ -233,4 +234,4 @@ class PluginContext:
             True if running on Qt 6 or newer, False otherwise.
         """
         qgis_6: int = 6
-        return int(QT_VERSION_STR.split(".")[0]) >= qgis_6  
+        return int(QT_VERSION_STR.split(".")[0]) >= qgis_6
