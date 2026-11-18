@@ -130,7 +130,8 @@ class DuplicateFilter:
             feature_type=feature.attribute(NewPointLayerFields.type.field_name),
             dim_1=feature.attribute(NewPointLayerFields.dim_1.field_name) or "",
             angle=feature.attribute(NewPointLayerFields.angle.field_name) or None,
-            connected=feature.attribute(NewPointLayerFields.connected.field_name) or "",
+            connected=feature.attribute(NewPointLayerFields.connected_fid.field_name)
+            or "",
         )
 
     def _delete_features_from_layer(

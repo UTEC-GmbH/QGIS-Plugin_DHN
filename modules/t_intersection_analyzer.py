@@ -344,9 +344,11 @@ class TIntersectionAnalyzer(FeatureCreator):
 
         dim_conn: int | None = connecting_pipe.attribute(self.dim_field_name)
         if dim_conn is not None and dim_main_1 is not None and dim_conn > dim_main_1:
-            # fmt: off
-            note_text: str = QCoreApplication.translate("feature_note", "Connecting pipe has a larger diameter than the main pipe.")  # noqa: E501
-            # fmt: on
+            note_template: str = QCoreApplication.translate(
+                "feature_note",
+                "Connecting pipe (DN {0}) is larger than the main pipe (DN {1}).",
+            )
+            note_text: str = note_template.format(dim_conn, dim_main_1)
             return self.create_questionable_point(
                 point, [*main_pipe, connecting_pipe], note=note_text
             )
