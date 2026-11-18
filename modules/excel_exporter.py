@@ -4,7 +4,6 @@ This module contains the ExcelExporter class for exporting results.
 """
 
 import copy
-import os
 import posixpath
 import re
 import tempfile
@@ -44,6 +43,30 @@ class _SummaryData:
     fitting_counts: tuple[tuple[str, int], ...]
     detailed_fittings: tuple[tuple[str, int] | None, ...]
     questionable_points: tuple[str, int] | None = None
+
+
+@dataclass(frozen=True)
+class _StyleIds:
+    bold: int
+    header_left: int
+    header_right: int
+    length: int
+    bold_length: int
+    amount: int
+    bold_amount: int
+
+
+@dataclass(frozen=True)
+class _TableSpec:
+    label_column: str
+    value_column: str
+    values: tuple[tuple[str, float | int] | None, ...]
+    total_label: str
+    total_value: float | int
+    bold_style: int
+    value_style: int | None
+    bold_value_style: int | None
+    extra_item: tuple[str, int] | None = None
 
 
 class ExcelExporter:
@@ -208,6 +231,70 @@ class ExcelExporter:
 
         return " / ".join(category_parts)
 
+    def _locate_or_add_summary_sheet(
+        self,
+        sheets_element: ET.Element,
+        relationships_root: ET.Element,
+        content_types_root: ET.Element,
+        sheet_paths: dict[str, str],
+        summary_name: str,
+    ) -> tuple[ET.Element, str, dict[str, bytes]]:
+        """Find or create the summary sheet; return (sheet, path, additions)."""
+        summary_aliases = {summary_name, "Summary", "Zusammenfassung"}
+        summary_sheet = next(
+            (sheet for sheet in sheets_element if sheet.get("name") in summary_aliases),
+            None,
+        )
+        additions: dict[str, bytes] = {}
+        if summary_sheet is None:
+            summary_sheet, summary_sheet_path = self._add_summary_sheet(
+                sheets_element,
+                relationships_root,
+                content_types_root,
+                sheet_paths,
+                summary_name,
+            )
+            additions[summary_sheet_path] = b""
+        else:
+            relationship_id = summary_sheet.get(f"{{{_DOCUMENT_REL_NS}}}id")
+            summary_sheet_path = sheet_paths.get(relationship_id or "", "")
+            if not summary_sheet_path:
+                raise_runtime_error(
+                    "Could not locate the existing Excel summary sheet."
+                )
+            summary_sheet.set("name", summary_name)
+            sheets_element.remove(summary_sheet)
+            sheets_element.insert(0, summary_sheet)
+        return summary_sheet, summary_sheet_path, additions
+
+    def _locate_pipe_sheet(
+        self,
+        sheets_element: ET.Element,
+        sheet_paths: dict[str, str],
+    ) -> tuple[ET.Element, str]:
+        """Find the pipe-runs sheet element and its archive path."""
+        pipe_sheet_name: str = QCoreApplication.translate("XlsxExport", "Pipe Runs")
+        pipe_sheet_aliases = {pipe_sheet_name, "Pipe Runs", "Leitungstrassen"}
+        pipe_sheet = next(
+            (
+                sheet
+                for sheet in sheets_element
+                if sheet.get("name") in pipe_sheet_aliases
+            ),
+            None,
+        )
+        if pipe_sheet is None:
+            raise_runtime_error(
+                f"Could not locate the Excel sheet '{pipe_sheet_name}'."
+            )
+        pipe_relationship_id = pipe_sheet.get(f"{{{_DOCUMENT_REL_NS}}}id")
+        pipe_sheet_path = sheet_paths.get(pipe_relationship_id or "", "")
+        if not pipe_sheet_path:
+            raise_runtime_error(
+                f"Could not locate the Excel sheet '{pipe_sheet_name}'."
+            )
+        return pipe_sheet, pipe_sheet_path
+
     def _write_summary_sheet(
         self, output_path: Path, summary_data: _SummaryData
     ) -> None:
@@ -216,12 +303,12 @@ class ExcelExporter:
         try:
             with zipfile.ZipFile(output_path, "r") as source:
                 names: set[str] = set(source.namelist())
-                workbook_root = ET.fromstring(source.read("xl/workbook.xml"))
-                relationships_root = ET.fromstring(
+                workbook_root = ET.fromstring(source.read("xl/workbook.xml"))  # noqa: S314
+                relationships_root = ET.fromstring(  # noqa: S314
                     source.read("xl/_rels/workbook.xml.rels")
                 )
-                content_types_root = ET.fromstring(source.read("[Content_Types].xml"))
-                styles_root = ET.fromstring(source.read("xl/styles.xml"))
+                content_types_root = ET.fromstring(source.read("[Content_Types].xml"))  # noqa: S314
+                styles_root = ET.fromstring(source.read("xl/styles.xml"))  # noqa: S314
                 shared_strings = (
                     self._read_shared_strings(source)
                     if "xl/sharedStrings.xml" in names
@@ -234,83 +321,25 @@ class ExcelExporter:
                 sheet_paths = self._worksheet_paths(sheets_element, relationships_root)
 
                 summary_name: str = QCoreApplication.translate("XlsxExport", "Summary")
-                summary_aliases = {
+                _, summary_sheet_path, additions = self._locate_or_add_summary_sheet(
+                    sheets_element,
+                    relationships_root,
+                    content_types_root,
+                    sheet_paths,
                     summary_name,
-                    "Summary",
-                    "Zusammenfassung",
-                }
-                summary_sheet = next(
-                    (
-                        sheet
-                        for sheet in sheets_element
-                        if sheet.get("name") in summary_aliases
-                    ),
-                    None,
                 )
 
-                additions: dict[str, bytes] = {}
-                if summary_sheet is None:
-                    summary_sheet, summary_sheet_path = self._add_summary_sheet(
-                        sheets_element,
-                        relationships_root,
-                        content_types_root,
-                        sheet_paths,
-                        summary_name,
-                    )
-                    additions[summary_sheet_path] = b""
-                else:
-                    relationship_id = summary_sheet.get(f"{{{_DOCUMENT_REL_NS}}}id")
-                    summary_sheet_path = sheet_paths.get(relationship_id or "", "")
-                    if not summary_sheet_path:
-                        raise_runtime_error(
-                            "Could not locate the existing Excel summary sheet."
-                        )
-                    summary_sheet.set("name", summary_name)
-                    sheets_element.remove(summary_sheet)
-                    sheets_element.insert(0, summary_sheet)
-
-                pipe_sheet_name: str = QCoreApplication.translate(
-                    "XlsxExport", "Pipe Runs"
+                _pipe_sheet, pipe_sheet_path = self._locate_pipe_sheet(
+                    sheets_element, sheet_paths
                 )
-                pipe_sheet_aliases = {
-                    pipe_sheet_name,
-                    "Pipe Runs",
-                    "Leitungstrassen",
-                }
-                pipe_sheet = next(
-                    (
-                        sheet
-                        for sheet in sheets_element
-                        if sheet.get("name") in pipe_sheet_aliases
-                    ),
-                    None,
-                )
-                if pipe_sheet is None:
-                    raise_runtime_error(
-                        f"Could not locate the Excel sheet '{pipe_sheet_name}'."
-                    )
-                pipe_relationship_id = pipe_sheet.get(f"{{{_DOCUMENT_REL_NS}}}id")
-                pipe_sheet_path = sheet_paths.get(pipe_relationship_id or "", "")
-                if not pipe_sheet_path:
-                    raise_runtime_error(
-                        f"Could not locate the Excel sheet '{pipe_sheet_name}'."
-                    )
 
-                (
-                    bold_style,
-                    header_left_style,
-                    header_right_style,
-                    length_style,
-                    bold_length_style,
-                    amount_style,
-                    bold_amount_style,
-                ) = self._add_excel_styles(styles_root)
-                pipe_sheet_root = ET.fromstring(source.read(pipe_sheet_path))
+                style_ids = self._add_excel_styles(styles_root)
+                pipe_sheet_root = ET.fromstring(source.read(pipe_sheet_path))  # noqa: S314
                 self._apply_pipe_length_format(
                     pipe_sheet_root,
                     shared_strings,
                     NewLineLayerFields.length.field_name,
-                    length_style,
+                    style_ids.length,
                 )
 
                 replacements = {
@@ -324,13 +353,7 @@ class ExcelExporter:
                     "xl/styles.xml": self._xml_bytes(styles_root, _MAIN_NS),
                     summary_sheet_path: self._summary_worksheet_xml(
                         summary_data,
-                        bold_style,
-                        header_left_style,
-                        header_right_style,
-                        length_style,
-                        bold_length_style,
-                        amount_style,
-                        bold_amount_style,
+                        style_ids,
                     ),
                 }
 
@@ -340,7 +363,7 @@ class ExcelExporter:
                     sheet_root = (
                         pipe_sheet_root
                         if path == pipe_sheet_path
-                        else ET.fromstring(source.read(path))
+                        else ET.fromstring(source.read(path))  # noqa: S314
                     )
                     self._hide_grid_lines(sheet_root)
                     replacements[path] = self._xml_bytes(sheet_root, _MAIN_NS)
@@ -370,7 +393,7 @@ class ExcelExporter:
                             name, data, compress_type=zipfile.ZIP_DEFLATED
                         )
 
-            os.replace(temp_path, output_path)
+            temp_path.replace(output_path)
             temp_path = None
         except (OSError, KeyError, ET.ParseError, zipfile.BadZipFile) as error:
             raise_runtime_error(f"Could not format Excel workbook: {error}")
@@ -473,7 +496,7 @@ class ExcelExporter:
     @staticmethod
     def _read_shared_strings(source: zipfile.ZipFile) -> list[str]:
         """Load the workbook shared-string table."""
-        root = ET.fromstring(source.read("xl/sharedStrings.xml"))
+        root = ET.fromstring(source.read("xl/sharedStrings.xml"))  # noqa: S314
         return [
             "".join(
                 text.text or "" for text in item.iter(ExcelExporter._tag(_MAIN_NS, "t"))
@@ -494,9 +517,137 @@ class ExcelExporter:
         return None
 
     @staticmethod
+    def _add_font_flag(font: ET.Element, flag: str) -> None:
+        """Insert a font flag element (e.g. bold, underline) in the correct position."""
+        flag_tag = ExcelExporter._tag(_MAIN_NS, flag)
+        if font.find(flag_tag) is not None:
+            return
+
+        font_element_order = (
+            "name",
+            "charset",
+            "family",
+            "b",
+            "i",
+            "strike",
+            "outline",
+            "shadow",
+            "condense",
+            "extend",
+            "color",
+            "sz",
+            "u",
+            "vertAlign",
+            "scheme",
+        )
+        flag_order = font_element_order.index(flag)
+        insertion_index = next(
+            (
+                index
+                for index, element in enumerate(font)
+                if element.tag.rsplit("}", 1)[-1] in font_element_order
+                and font_element_order.index(element.tag.rsplit("}", 1)[-1])
+                > flag_order
+            ),
+            len(font),
+        )
+        font.insert(insertion_index, ET.Element(flag_tag))
+
+    @staticmethod
+    def _find_or_add_style(  # noqa: PLR0913
+        cell_styles: ET.Element,
+        font_id: int,
+        num_fmt_id: int,
+        *,
+        bold: bool,
+        number_format: bool,
+        horizontal: str | None = None,
+    ) -> int:
+        """Find an existing cell style or add a new one; return its index."""
+        attributes = {
+            "numFmtId": str(num_fmt_id),
+            "fontId": str(font_id),
+            "fillId": "0",
+            "borderId": "0",
+            "xfId": "0",
+            "applyFont": "1" if bold else None,
+            "applyNumberFormat": "1" if number_format else None,
+            "applyAlignment": "1" if horizontal is not None else None,
+        }
+        for index, style in enumerate(cell_styles):
+            alignment = style.find(ExcelExporter._tag(_MAIN_NS, "alignment"))
+            alignment_value = (
+                alignment.get("horizontal") if alignment is not None else None
+            )
+            if (
+                all(
+                    style.get(key) == value
+                    for key, value in attributes.items()
+                    if value is not None
+                )
+                and alignment_value == horizontal
+            ):
+                return index
+        style_attrs = {
+            key: value for key, value in attributes.items() if value is not None
+        }
+        style_id = len(cell_styles)
+        cell_style = ET.SubElement(
+            cell_styles, ExcelExporter._tag(_MAIN_NS, "xf"), style_attrs
+        )
+        if horizontal is not None:
+            ET.SubElement(
+                cell_style,
+                ExcelExporter._tag(_MAIN_NS, "alignment"),
+                {"horizontal": horizontal},
+            )
+        cell_styles.set("count", str(len(cell_styles)))
+        return style_id
+
+    @staticmethod
+    def _ensure_bold_font_id(fonts: ET.Element) -> int:
+        """Return the index of the bold (non-underline) font, creating it if needed."""
+        bold_font_id = next(
+            (
+                index
+                for index, font in enumerate(fonts)
+                if font.find(ExcelExporter._tag(_MAIN_NS, "b")) is not None
+                and font.find(ExcelExporter._tag(_MAIN_NS, "u")) is None
+            ),
+            None,
+        )
+        if bold_font_id is None:
+            bold_font = copy.deepcopy(fonts[0])
+            ExcelExporter._add_font_flag(bold_font, "b")
+            bold_font_id = len(fonts)
+            fonts.append(bold_font)
+            fonts.set("count", str(len(fonts)))
+        return bold_font_id
+
+    @staticmethod
+    def _ensure_header_font_id(fonts: ET.Element, bold_font_id: int) -> int:
+        """Return the index of the bold+underline header font, creating it if needed."""
+        header_font_id = next(
+            (
+                index
+                for index, font in enumerate(fonts)
+                if font.find(ExcelExporter._tag(_MAIN_NS, "b")) is not None
+                and font.find(ExcelExporter._tag(_MAIN_NS, "u")) is not None
+            ),
+            None,
+        )
+        if header_font_id is None:
+            header_font = copy.deepcopy(fonts[bold_font_id])
+            ExcelExporter._add_font_flag(header_font, "u")
+            header_font_id = len(fonts)
+            fonts.append(header_font)
+            fonts.set("count", str(len(fonts)))
+        return header_font_id
+
+    @staticmethod
     def _add_excel_styles(
         styles_root: ET.Element,
-    ) -> tuple[int, int, int, int, int, int, int]:
+    ) -> "_StyleIds":
         """Add summary font and number formats and return their style IDs."""
         num_fmts = styles_root.find(ExcelExporter._tag(_MAIN_NS, "numFmts"))
         if num_fmts is None:
@@ -516,7 +667,7 @@ class ExcelExporter:
                 for element in num_fmts.findall(ExcelExporter._tag(_MAIN_NS, "numFmt"))
             ]
             format_id: int = max(163, *used_format_ids) + 1
-            num_format = ET.SubElement(
+            ET.SubElement(
                 num_fmts,
                 ExcelExporter._tag(_MAIN_NS, "numFmt"),
                 {"numFmtId": str(format_id), "formatCode": '#,##0.0 "m"'},
@@ -527,133 +678,15 @@ class ExcelExporter:
 
         fonts = styles_root.find(ExcelExporter._tag(_MAIN_NS, "fonts"))
         cell_xfs = styles_root.find(ExcelExporter._tag(_MAIN_NS, "cellXfs"))
-        if fonts is None:
-            raise_runtime_error("The Excel workbook has incomplete style definitions.")
-        if cell_xfs is None:
-            raise_runtime_error("The Excel workbook has incomplete style definitions.")
-        if len(fonts) == 0:
+        if fonts is None or cell_xfs is None or len(fonts) == 0:
             raise_runtime_error("The Excel workbook has incomplete style definitions.")
 
-        def add_font_flag(font: ET.Element, flag: str) -> None:
-            flag_tag = ExcelExporter._tag(_MAIN_NS, flag)
-            if font.find(flag_tag) is not None:
-                return
+        bold_font_id = ExcelExporter._ensure_bold_font_id(fonts)
+        header_font_id = ExcelExporter._ensure_header_font_id(fonts, bold_font_id)
 
-            font_element_order = (
-                "name",
-                "charset",
-                "family",
-                "b",
-                "i",
-                "strike",
-                "outline",
-                "shadow",
-                "condense",
-                "extend",
-                "color",
-                "sz",
-                "u",
-                "vertAlign",
-                "scheme",
-            )
-            flag_order = font_element_order.index(flag)
-            insertion_index = next(
-                (
-                    index
-                    for index, element in enumerate(font)
-                    if element.tag.rsplit("}", 1)[-1] in font_element_order
-                    and font_element_order.index(element.tag.rsplit("}", 1)[-1])
-                    > flag_order
-                ),
-                len(font),
-            )
-            font.insert(insertion_index, ET.Element(flag_tag))
-
-        bold_font_id = next(
-            (
-                index
-                for index, font in enumerate(fonts)
-                if font.find(ExcelExporter._tag(_MAIN_NS, "b")) is not None
-                and font.find(ExcelExporter._tag(_MAIN_NS, "u")) is None
-            ),
-            None,
-        )
-        if bold_font_id is None:
-            bold_font = copy.deepcopy(fonts[0])
-            add_font_flag(bold_font, "b")
-            bold_font_id = len(fonts)
-            fonts.append(bold_font)
-            fonts.set("count", str(len(fonts)))
-
-        header_font_id = next(
-            (
-                index
-                for index, font in enumerate(fonts)
-                if font.find(ExcelExporter._tag(_MAIN_NS, "b")) is not None
-                and font.find(ExcelExporter._tag(_MAIN_NS, "u")) is not None
-            ),
-            None,
-        )
-        if header_font_id is None:
-            header_font = copy.deepcopy(fonts[bold_font_id])
-            add_font_flag(header_font, "u")
-            header_font_id = len(fonts)
-            fonts.append(header_font)
-            fonts.set("count", str(len(fonts)))
-
-        def find_or_add_style(
-            cell_styles: ET.Element,
-            font_id: int,
-            num_fmt_id: int,
-            *,
-            bold: bool,
-            number_format: bool,
-            horizontal: str | None = None,
-        ) -> int:
-            attributes = {
-                "numFmtId": str(num_fmt_id),
-                "fontId": str(font_id),
-                "fillId": "0",
-                "borderId": "0",
-                "xfId": "0",
-                "applyFont": "1" if bold else None,
-                "applyNumberFormat": "1" if number_format else None,
-                "applyAlignment": "1" if horizontal is not None else None,
-            }
-            for index, style in enumerate(cell_styles):
-                alignment = style.find(ExcelExporter._tag(_MAIN_NS, "alignment"))
-                alignment_value = (
-                    alignment.get("horizontal") if alignment is not None else None
-                )
-                if (
-                    all(
-                        style.get(key) == value
-                        for key, value in attributes.items()
-                        if value is not None
-                    )
-                    and alignment_value == horizontal
-                ):
-                    return index
-            style = {
-                key: value for key, value in attributes.items() if value is not None
-            }
-            style_id = len(cell_styles)
-            cell_style = ET.SubElement(
-                cell_styles, ExcelExporter._tag(_MAIN_NS, "xf"), style
-            )
-            if horizontal is not None:
-                ET.SubElement(
-                    cell_style,
-                    ExcelExporter._tag(_MAIN_NS, "alignment"),
-                    {"horizontal": horizontal},
-                )
-            cell_styles.set("count", str(len(cell_styles)))
-            return style_id
-
-        bold_style = find_or_add_style(
-            cell_xfs, bold_font_id, 164, bold=True, number_format=False
-        )
-        header_left_style = find_or_add_style(
+        foas = ExcelExporter._find_or_add_style
+        bold_style = foas(cell_xfs, bold_font_id, 164, bold=True, number_format=False)
+        header_left_style = foas(
             cell_xfs,
             header_font_id,
             164,
@@ -661,7 +694,7 @@ class ExcelExporter:
             number_format=False,
             horizontal="left",
         )
-        header_right_style = find_or_add_style(
+        header_right_style = foas(
             cell_xfs,
             header_font_id,
             164,
@@ -669,25 +702,44 @@ class ExcelExporter:
             number_format=False,
             horizontal="right",
         )
-        length_style = find_or_add_style(
-            cell_xfs, 0, format_id, bold=False, number_format=True
-        )
-        bold_length_style = find_or_add_style(
+        length_style = foas(cell_xfs, 0, format_id, bold=False, number_format=True)
+        bold_length_style = foas(
             cell_xfs, bold_font_id, format_id, bold=True, number_format=True
         )
-        amount_style = find_or_add_style(cell_xfs, 0, 3, bold=False, number_format=True)
-        bold_amount_style = find_or_add_style(
+        amount_style = foas(cell_xfs, 0, 3, bold=False, number_format=True)
+        bold_amount_style = foas(
             cell_xfs, bold_font_id, 3, bold=True, number_format=True
         )
-        return (
-            bold_style,
-            header_left_style,
-            header_right_style,
-            length_style,
-            bold_length_style,
-            amount_style,
-            bold_amount_style,
+        return _StyleIds(
+            bold=bold_style,
+            header_left=header_left_style,
+            header_right=header_right_style,
+            length=length_style,
+            bold_length=bold_length_style,
+            amount=amount_style,
+            bold_amount=bold_amount_style,
         )
+
+    @staticmethod
+    def _find_length_column(
+        sheet_data: ET.Element,
+        length_field_name: str,
+        shared_strings: list[str],
+    ) -> str:
+        """Scan the header row and return the column letter for the length field."""
+        header_row = next((row for row in sheet_data if row.get("r") == "1"), None)
+        if header_row is None:
+            raise_runtime_error("The Excel pipe-run sheet has no header row.")
+        for cell in header_row.findall(ExcelExporter._tag(_MAIN_NS, "c")):
+            if ExcelExporter._cell_text(cell, shared_strings) == length_field_name:
+                match = re.match(r"[A-Z]+", cell.get("r", ""))
+                if match is not None:
+                    return match.group(0)
+        raise_runtime_error(
+            f"Could not find the '{length_field_name}' column in the pipe-run sheet."
+        )
+        # pyrefly: ignore[unreachable]
+        return ""
 
     @staticmethod
     def _apply_pipe_length_format(
@@ -701,21 +753,9 @@ class ExcelExporter:
         if sheet_data is None:
             raise_runtime_error("The Excel pipe-run sheet has no cell data.")
 
-        header_row = next((row for row in sheet_data if row.get("r") == "1"), None)
-        if header_row is None:
-            raise_runtime_error("The Excel pipe-run sheet has no header row.")
-        length_column: str | None = None
-        for cell in header_row.findall(ExcelExporter._tag(_MAIN_NS, "c")):
-            if ExcelExporter._cell_text(cell, shared_strings) == length_field_name:
-                match = re.match(r"[A-Z]+", cell.get("r", ""))
-                if match is not None:
-                    length_column = match.group(0)
-                    break
-        if length_column is None:
-            raise_runtime_error(
-                f"Could not find the '{length_field_name}' "
-                "column in the pipe-run sheet."
-            )
+        length_column = ExcelExporter._find_length_column(
+            sheet_data, length_field_name, shared_strings
+        )
 
         for row in sheet_data:
             if row.get("r") == "1":
@@ -768,13 +808,7 @@ class ExcelExporter:
     def _summary_worksheet_xml(
         cls,
         summary_data: _SummaryData,
-        bold_style: int,
-        header_left_style: int,
-        header_right_style: int,
-        length_style: int,
-        bold_length_style: int,
-        amount_style: int,
-        bold_amount_style: int,
+        style_ids: _StyleIds,
     ) -> bytes:
         """Create the summary worksheet."""
         root = ET.Element(cls._tag(_MAIN_NS, "worksheet"))
@@ -798,7 +832,7 @@ class ExcelExporter:
             {"defaultRowHeight": "15"},
         )
         columns = ET.SubElement(root, cls._tag(_MAIN_NS, "cols"))
-        widths = (15, 15, 15, 20, 17, 8, 8, 28, 8)
+        widths = (15, 17, 15, 20, 17, 8, 8, 28, 8)
         for column, width in enumerate(widths, start=1):
             ET.SubElement(
                 columns,
@@ -822,7 +856,9 @@ class ExcelExporter:
             ("I", QCoreApplication.translate("XlsxExport", "Amount")),
         ):
             style = (
-                header_right_style if column in {"C", "F", "I"} else header_left_style
+                style_ids.header_right
+                if column in {"C", "F", "I"}
+                else style_ids.header_left
             )
             cls._add_text_cell(header, f"{column}3", label, style)
 
@@ -836,44 +872,50 @@ class ExcelExporter:
             )
             cls._add_summary_cells(
                 row,
-                "B",
-                "C",
-                summary_data.pipe_runs,
                 index,
-                total_label,
-                sum(length for _, length in summary_data.pipe_runs),
-                bold_style,
-                length_style,
-                bold_length_style,
-            )
-            cls._add_summary_cells(
-                row,
-                "E",
-                "F",
-                summary_data.fitting_counts,
-                index,
-                total_label,
-                sum(count for _, count in summary_data.fitting_counts),
-                bold_style,
-                amount_style,
-                bold_amount_style,
-                extra_item=summary_data.questionable_points,
-            )
-            cls._add_summary_cells(
-                row,
-                "H",
-                "I",
-                summary_data.detailed_fittings,
-                index,
-                total_label,
-                sum(
-                    item[1]
-                    for item in summary_data.detailed_fittings
-                    if item is not None
+                _TableSpec(
+                    label_column="B",
+                    value_column="C",
+                    values=summary_data.pipe_runs,
+                    total_label=total_label,
+                    total_value=sum(length for _, length in summary_data.pipe_runs),
+                    bold_style=style_ids.bold,
+                    value_style=style_ids.length,
+                    bold_value_style=style_ids.bold_length,
                 ),
-                bold_style,
-                amount_style,
-                bold_amount_style,
+            )
+            cls._add_summary_cells(
+                row,
+                index,
+                _TableSpec(
+                    label_column="E",
+                    value_column="F",
+                    values=summary_data.fitting_counts,
+                    total_label=total_label,
+                    total_value=sum(count for _, count in summary_data.fitting_counts),
+                    bold_style=style_ids.bold,
+                    value_style=style_ids.amount,
+                    bold_value_style=style_ids.bold_amount,
+                    extra_item=summary_data.questionable_points,
+                ),
+            )
+            cls._add_summary_cells(
+                row,
+                index,
+                _TableSpec(
+                    label_column="H",
+                    value_column="I",
+                    values=summary_data.detailed_fittings,
+                    total_label=total_label,
+                    total_value=sum(
+                        item[1]
+                        for item in summary_data.detailed_fittings
+                        if item is not None
+                    ),
+                    bold_style=style_ids.bold,
+                    value_style=style_ids.amount,
+                    bold_value_style=style_ids.bold_amount,
+                ),
             )
 
         ET.SubElement(
@@ -894,40 +936,43 @@ class ExcelExporter:
     def _add_summary_cells(
         cls,
         row: ET.Element,
-        label_column: str,
-        value_column: str,
-        values: tuple[tuple[str, float | int] | None, ...],
         index: int,
-        total_label: str,
-        total_value: float,
-        bold_style: int,
-        value_style: int | None = None,
-        bold_value_style: int | None = None,
-        extra_item: tuple[str, int] | None = None,
+        spec: _TableSpec,
     ) -> None:
         row_number: str = row.get("r", "")
-        if index < len(values):
-            item = values[index]
+        if index < len(spec.values):
+            item = spec.values[index]
             if item is not None:
                 label, value = item
-                cls._add_text_cell(row, f"{label_column}{row_number}", label)
+                cls._add_text_cell(row, f"{spec.label_column}{row_number}", label)
                 cls._add_number_cell(
-                    row, f"{value_column}{row_number}", value, value_style
+                    row,
+                    f"{spec.value_column}{row_number}",
+                    value,
+                    spec.value_style,
                 )
-        elif index == len(values) + 1:
+        elif index == len(spec.values) + 1:
             cls._add_text_cell(
-                row, f"{label_column}{row_number}", total_label, bold_style
+                row,
+                f"{spec.label_column}{row_number}",
+                spec.total_label,
+                spec.bold_style,
             )
             cls._add_number_cell(
                 row,
-                f"{value_column}{row_number}",
-                total_value,
-                bold_value_style or bold_style,
+                f"{spec.value_column}{row_number}",
+                spec.total_value,
+                spec.bold_value_style or spec.bold_style,
             )
-        elif extra_item is not None and index == len(values) + 3:
-            label, value = extra_item
-            cls._add_text_cell(row, f"{label_column}{row_number}", label)
-            cls._add_number_cell(row, f"{value_column}{row_number}", value, value_style)
+        elif spec.extra_item is not None and index == len(spec.values) + 3:
+            label, value = spec.extra_item
+            cls._add_text_cell(row, f"{spec.label_column}{row_number}", label)
+            cls._add_number_cell(
+                row,
+                f"{spec.value_column}{row_number}",
+                value,
+                spec.value_style,
+            )
 
     @staticmethod
     def _add_text_cell(
