@@ -9,11 +9,15 @@ import posixpath
 import re
 import tempfile
 import zipfile
+from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
 from qgis.core import (
     QgsCoordinateTransformContext,
+    QgsFeature,
+    QgsVariantUtils,
     QgsVectorFileWriter,
     QgsVectorLayer,
 )
@@ -32,9 +36,14 @@ _MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 _DOCUMENT_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 _PACKAGE_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 _CONTENT_TYPES_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
-_DYNAMIC_ARRAY_NS = (
-    "http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray"
-)
+
+
+@dataclass(frozen=True)
+class _SummaryData:
+    pipe_runs: tuple[tuple[str, float], ...]
+    fitting_counts: tuple[tuple[str, int], ...]
+    detailed_fittings: tuple[tuple[str, int] | None, ...]
+    questionable_points: tuple[str, int] | None = None
 
 
 class ExcelExporter:
@@ -60,6 +69,10 @@ class ExcelExporter:
         output_file_name: str = f"{Names.excel_file_output} - {layer_name}.xlsx"
         output_path: Path = output_dir / output_file_name
 
+        summary_data: _SummaryData = self._create_summary_data(
+            fittings_layer, pipe_layer
+        )
+
         # --- Export point features (fittings) to plugin output file ---
         sheet_name: str = QCoreApplication.translate("XlsxExport", "Fittings")
         self._write_to_plugin_output_file(fittings_layer, output_path, sheet_name)
@@ -68,19 +81,137 @@ class ExcelExporter:
         sheet_name: str = QCoreApplication.translate("XlsxExport", "Pipe Runs")
         self._write_to_plugin_output_file(pipe_layer, output_path, sheet_name)
 
-        self._write_summary_sheet(
-            output_path,
-            tuple(field.name() for field in fittings_layer.fields()),
-            tuple(field.name() for field in pipe_layer.fields()),
+        self._write_summary_sheet(output_path, summary_data)
+
+    def _create_summary_data(
+        self, fittings_layer: QgsVectorLayer, pipe_layer: QgsVectorLayer
+    ) -> _SummaryData:
+        """Aggregate the three summary tables from the exported layers."""
+        fitting_indices = {
+            field: self._field_index(fittings_layer, field.field_name)
+            for field in (
+                NewPointLayerFields.type,
+                NewPointLayerFields.dim_1,
+                NewPointLayerFields.dim_2,
+                NewPointLayerFields.angle,
+            )
+        }
+        pipe_indices = {
+            field: self._field_index(pipe_layer, field.field_name)
+            for field in (NewLineLayerFields.dim, NewLineLayerFields.length)
+        }
+
+        fitting_counts: dict[tuple[str, str], int] = defaultdict(int)
+        fitting_type_counts: dict[str, int] = defaultdict(int)
+        questionable_type: str = FittingType.QUESTIONABLE.translated
+        questionable_count: int = 0
+        bend_type: str = FittingType.BEND.translated
+        for feature in fittings_layer.getFeatures():
+            fitting_type_value = self._attribute_value(
+                feature, fitting_indices[NewPointLayerFields.type]
+            )
+            fitting_type: str = str(fitting_type_value or "")
+
+            if fitting_type == questionable_type:
+                questionable_count += 1
+                continue
+
+            fitting_type_counts[fitting_type] += 1
+
+            dim_1 = self._attribute_value(
+                feature, fitting_indices[NewPointLayerFields.dim_1]
+            )
+            dim_2 = self._attribute_value(
+                feature, fitting_indices[NewPointLayerFields.dim_2]
+            )
+            angle = self._attribute_value(
+                feature, fitting_indices[NewPointLayerFields.angle]
+            )
+            category: str = self._fitting_category(
+                dim_1, dim_2, angle if fitting_type == bend_type else None
+            )
+            fitting_counts[(fitting_type, category)] += 1
+
+        pipe_lengths: dict[int | None, float] = defaultdict(float)
+        for feature in pipe_layer.getFeatures():
+            diameter_value = self._attribute_value(
+                feature, pipe_indices[NewLineLayerFields.dim]
+            )
+            diameter: int | None = (
+                int(diameter_value) if diameter_value is not None else None
+            )
+            length_value = self._attribute_value(
+                feature, pipe_indices[NewLineLayerFields.length]
+            )
+            if length_value is not None:
+                pipe_lengths[diameter] += float(length_value)
+
+        pipe_rows = tuple(
+            (f"DN {diameter}" if diameter is not None else "", length)
+            for diameter, length in sorted(
+                pipe_lengths.items(),
+                key=lambda item: (
+                    item[0] is None,
+                    item[0] if item[0] is not None else 0,
+                ),
+            )
+        )
+        fitting_rows = tuple(sorted(fitting_type_counts.items()))
+        detailed_rows: list[tuple[str, int] | None] = []
+        previous_fitting_type: str | None = None
+        for (fitting_type, category), count in sorted(fitting_counts.items()):
+            if (
+                previous_fitting_type is not None
+                and fitting_type != previous_fitting_type
+            ):
+                detailed_rows.append(None)
+            label = f"{fitting_type} / {category}" if category else fitting_type
+            detailed_rows.append((label, count))
+            previous_fitting_type = fitting_type
+        return _SummaryData(
+            pipe_rows,
+            fitting_rows,
+            tuple(detailed_rows),
+            (questionable_type, questionable_count) if questionable_count > 0 else None,
         )
 
+    @staticmethod
+    def _field_index(layer: QgsVectorLayer, field_name: str) -> int:
+        """Return a required field index or report a clear export error."""
+        index: int = layer.fields().indexFromName(field_name)
+        if index < 0:
+            raise_runtime_error(
+                f"Required field '{field_name}' not found in layer '{layer.name()}'."
+            )
+        return index
+
+    @staticmethod
+    def _attribute_value(feature: QgsFeature, index: int) -> object | None:
+        """Return a field value as Python data, normalizing Qt null variants."""
+        value = feature.attribute(index)
+        return None if QgsVariantUtils.isNull(value) else value
+
+    @staticmethod
+    def _fitting_category(dim_1: object, dim_2: object, angle: object) -> str:
+        """Format dimensions and an optional bend-angle band for the summary."""
+        category_parts: list[str] = [
+            f"DN {int(dimension)}"
+            for dimension in (dim_1, dim_2)
+            if dimension is not None
+        ]
+
+        if angle is not None:
+            angle_degrees: int = int(angle)
+            upper_bound: int = max(45, ((angle_degrees + 44) // 45) * 45)
+            lower_bound: int = max(0, upper_bound - 45)
+            category_parts.append(f"{lower_bound}° - {upper_bound}°")
+
+        return " / ".join(category_parts)
+
     def _write_summary_sheet(
-        self,
-        output_path: Path,
-        fittings_headers: tuple[str, ...],
-        pipe_headers: tuple[str, ...],
+        self, output_path: Path, summary_data: _SummaryData
     ) -> None:
-        """Insert formula-driven summary tables into the workbook."""
+        """Insert the three formatted summary tables into the workbook."""
         temp_path: Path | None = None
         try:
             with zipfile.ZipFile(output_path, "r") as source:
@@ -101,46 +232,6 @@ class ExcelExporter:
                 if sheets_element is None:
                     raise_runtime_error("The Excel workbook has no sheets section.")
                 sheet_paths = self._worksheet_paths(sheets_element, relationships_root)
-
-                fittings_sheet_name: str = QCoreApplication.translate(
-                    "XlsxExport", "Fittings"
-                )
-                fittings_sheet = next(
-                    (
-                        sheet
-                        for sheet in sheets_element
-                        if sheet.get("name") == fittings_sheet_name
-                    ),
-                    None,
-                )
-                pipe_sheet_name: str = QCoreApplication.translate(
-                    "XlsxExport", "Pipe Runs"
-                )
-                pipe_sheet = next(
-                    (
-                        sheet
-                        for sheet in sheets_element
-                        if sheet.get("name") == pipe_sheet_name
-                    ),
-                    None,
-                )
-                if fittings_sheet is None or pipe_sheet is None:
-                    raise_runtime_error(
-                        "Could not locate the Excel fittings or pipe-run sheet."
-                    )
-
-                fittings_relationship_id = fittings_sheet.get(
-                    f"{{{_DOCUMENT_REL_NS}}}id"
-                )
-                fittings_sheet_path = sheet_paths.get(
-                    fittings_relationship_id or "", ""
-                )
-                pipe_relationship_id = pipe_sheet.get(f"{{{_DOCUMENT_REL_NS}}}id")
-                pipe_sheet_path = sheet_paths.get(pipe_relationship_id or "", "")
-                if not fittings_sheet_path or not pipe_sheet_path:
-                    raise_runtime_error(
-                        "Could not locate the Excel fittings or pipe-run sheet."
-                    )
 
                 summary_name: str = QCoreApplication.translate("XlsxExport", "Summary")
                 summary_aliases = {
@@ -178,92 +269,49 @@ class ExcelExporter:
                     sheets_element.remove(summary_sheet)
                     sheets_element.insert(0, summary_sheet)
 
+                pipe_sheet_name: str = QCoreApplication.translate(
+                    "XlsxExport", "Pipe Runs"
+                )
+                pipe_sheet_aliases = {
+                    pipe_sheet_name,
+                    "Pipe Runs",
+                    "Leitungstrassen",
+                }
+                pipe_sheet = next(
+                    (
+                        sheet
+                        for sheet in sheets_element
+                        if sheet.get("name") in pipe_sheet_aliases
+                    ),
+                    None,
+                )
+                if pipe_sheet is None:
+                    raise_runtime_error(
+                        f"Could not locate the Excel sheet '{pipe_sheet_name}'."
+                    )
+                pipe_relationship_id = pipe_sheet.get(f"{{{_DOCUMENT_REL_NS}}}id")
+                pipe_sheet_path = sheet_paths.get(pipe_relationship_id or "", "")
+                if not pipe_sheet_path:
+                    raise_runtime_error(
+                        f"Could not locate the Excel sheet '{pipe_sheet_name}'."
+                    )
+
                 (
+                    bold_style,
                     header_left_style,
                     header_right_style,
                     length_style,
+                    bold_length_style,
                     amount_style,
-                    total_dxf_id,
-                    separator_dxf_id,
+                    bold_amount_style,
                 ) = self._add_excel_styles(styles_root)
-                fittings_sheet_root = ET.fromstring(source.read(fittings_sheet_path))
                 pipe_sheet_root = ET.fromstring(source.read(pipe_sheet_path))
-                self._ensure_worksheet_headers(fittings_sheet_root, fittings_headers)
-                self._ensure_worksheet_headers(pipe_sheet_root, pipe_headers)
                 self._apply_pipe_length_format(
                     pipe_sheet_root,
                     shared_strings,
                     NewLineLayerFields.length.field_name,
                     length_style,
                 )
-
-                fittings_columns = self._worksheet_columns(
-                    fittings_sheet_root, shared_strings
-                )
-                pipe_columns = self._worksheet_columns(pipe_sheet_root, shared_strings)
-                removed_parts = {
-                    name
-                    for name in names
-                    if re.fullmatch(r"xl/tables/table\d+\.xml", name)
-                }
-                worksheet_relationship_replacements: dict[str, bytes] = {}
-                for worksheet_root, worksheet_path in (
-                    (fittings_sheet_root, fittings_sheet_path),
-                    (pipe_sheet_root, pipe_sheet_path),
-                ):
-                    for table_parts in worksheet_root.findall(
-                        self._tag(_MAIN_NS, "tableParts")
-                    ):
-                        worksheet_root.remove(table_parts)
-                    relationship_path = self._worksheet_relationships_path(
-                        worksheet_path
-                    )
-                    if relationship_path in names:
-                        worksheet_relationships = ET.fromstring(
-                            source.read(relationship_path)
-                        )
-                        for relationship in list(
-                            worksheet_relationships.findall(
-                                self._tag(_PACKAGE_REL_NS, "Relationship")
-                            )
-                        ):
-                            if not relationship.get("Type", "").endswith("/table"):
-                                continue
-                            target = relationship.get("Target")
-                            if target is not None:
-                                removed_parts.add(
-                                    posixpath.normpath(
-                                        posixpath.join(
-                                            posixpath.dirname(worksheet_path), target
-                                        )
-                                    )
-                                )
-                            worksheet_relationships.remove(relationship)
-                        if len(worksheet_relationships):
-                            worksheet_relationship_replacements[relationship_path] = (
-                                self._xml_bytes(
-                                    worksheet_relationships, _PACKAGE_REL_NS
-                                )
-                            )
-                        else:
-                            removed_parts.add(relationship_path)
-
-                formulas = self._summary_formulas(
-                    fittings_columns,
-                    pipe_columns,
-                    fittings_sheet_name,
-                    pipe_sheet_name,
-                )
-                self._add_dynamic_array_metadata(
-                    workbook_root,
-                    relationships_root,
-                    content_types_root,
-                )
-                for content_type in list(
-                    content_types_root.findall(self._tag(_CONTENT_TYPES_NS, "Override"))
-                ):
-                    if content_type.get("PartName", "").startswith("/xl/tables/"):
-                        content_types_root.remove(content_type)
 
                 replacements = {
                     "xl/workbook.xml": self._xml_bytes(workbook_root, _MAIN_NS),
@@ -274,25 +322,29 @@ class ExcelExporter:
                         content_types_root, _CONTENT_TYPES_NS
                     ),
                     "xl/styles.xml": self._xml_bytes(styles_root, _MAIN_NS),
-                    fittings_sheet_path: self._xml_bytes(fittings_sheet_root, _MAIN_NS),
-                    pipe_sheet_path: self._xml_bytes(pipe_sheet_root, _MAIN_NS),
                     summary_sheet_path: self._summary_worksheet_xml(
-                        formulas,
+                        summary_data,
+                        bold_style,
                         header_left_style,
                         header_right_style,
                         length_style,
+                        bold_length_style,
                         amount_style,
-                        total_dxf_id,
-                        separator_dxf_id,
+                        bold_amount_style,
                     ),
                 }
-                replacements.update(worksheet_relationship_replacements)
-                metadata_path = "xl/metadata.xml"
-                metadata_bytes = self._dynamic_array_metadata_xml()
-                if metadata_path in names:
-                    replacements[metadata_path] = metadata_bytes
-                else:
-                    additions[metadata_path] = metadata_bytes
+
+                for path in sheet_paths.values():
+                    if path == summary_sheet_path:
+                        continue
+                    sheet_root = (
+                        pipe_sheet_root
+                        if path == pipe_sheet_path
+                        else ET.fromstring(source.read(path))
+                    )
+                    self._hide_grid_lines(sheet_root)
+                    replacements[path] = self._xml_bytes(sheet_root, _MAIN_NS)
+
                 if summary_sheet_path in additions:
                     additions[summary_sheet_path] = replacements.pop(summary_sheet_path)
 
@@ -309,8 +361,6 @@ class ExcelExporter:
                 ) as destination:
                     destination.comment = source.comment
                     for item in source.infolist():
-                        if item.filename in removed_parts:
-                            continue
                         data = replacements.pop(item.filename, None)
                         if data is None:
                             data = source.read(item.filename)
@@ -352,390 +402,6 @@ class ExcelExporter:
             )
             paths[relationship_id] = path
         return paths
-
-    @staticmethod
-    def _worksheet_relationships_path(worksheet_path: str) -> str:
-        directory, filename = posixpath.split(worksheet_path)
-        return posixpath.join(directory, "_rels", f"{filename}.rels")
-
-    @staticmethod
-    def _worksheet_columns(
-        worksheet: ET.Element, shared_strings: list[str]
-    ) -> tuple[str, ...]:
-        """Return the raw worksheet headers."""
-        sheet_data = worksheet.find(ExcelExporter._tag(_MAIN_NS, "sheetData"))
-        if sheet_data is None:
-            raise_runtime_error("An Excel data sheet has no cell data.")
-
-        header_row = next((row for row in sheet_data if row.get("r") == "1"), None)
-        if header_row is None:
-            raise_runtime_error("An Excel data sheet has no header row.")
-
-        headers: list[str] = []
-        for cell in header_row.findall(ExcelExporter._tag(_MAIN_NS, "c")):
-            header = ExcelExporter._cell_text(cell, shared_strings)
-            match = re.fullmatch(r"([A-Z]+)1", cell.get("r", ""))
-            if not header or match is None:
-                raise_runtime_error("An Excel data sheet has an invalid column header.")
-            headers.append(header)
-
-        if not headers or len(set(headers)) != len(headers):
-            raise_runtime_error("Excel data sheet column headers must be unique.")
-        return tuple(headers)
-
-    @staticmethod
-    def _ensure_worksheet_headers(
-        worksheet: ET.Element, headers: tuple[str, ...]
-    ) -> None:
-        """Restore field headers omitted by the XLSX driver for empty layers."""
-        sheet_data = worksheet.find(ExcelExporter._tag(_MAIN_NS, "sheetData"))
-        if sheet_data is None:
-            raise_runtime_error("An Excel data sheet has no cell data.")
-
-        if any(row.get("r") == "1" for row in sheet_data):
-            return
-        if len(sheet_data) > 0:
-            raise_runtime_error("An Excel data sheet has no header row.")
-        if not headers or len(set(headers)) != len(headers):
-            raise_runtime_error("Excel data sheet column headers must be unique.")
-
-        header_row = ET.Element(ExcelExporter._tag(_MAIN_NS, "row"), {"r": "1"})
-        for index, header in enumerate(headers, start=1):
-            cell = ET.SubElement(
-                header_row,
-                ExcelExporter._tag(_MAIN_NS, "c"),
-                {
-                    "r": f"{ExcelExporter._excel_column_name(index)}1",
-                    "t": "inlineStr",
-                },
-            )
-            inline_string = ET.SubElement(cell, ExcelExporter._tag(_MAIN_NS, "is"))
-            text = ET.SubElement(inline_string, ExcelExporter._tag(_MAIN_NS, "t"))
-            text.text = header
-        sheet_data.append(header_row)
-
-        dimension = worksheet.find(ExcelExporter._tag(_MAIN_NS, "dimension"))
-        if dimension is None:
-            dimension = ET.Element(
-                ExcelExporter._tag(_MAIN_NS, "dimension"),
-                {"ref": f"A1:{ExcelExporter._excel_column_name(len(headers))}1"},
-            )
-            sheet_views = worksheet.find(ExcelExporter._tag(_MAIN_NS, "sheetViews"))
-            worksheet.insert(
-                list(worksheet).index(sheet_views) if sheet_views is not None else 0,
-                dimension,
-            )
-        else:
-            dimension.set(
-                "ref", f"A1:{ExcelExporter._excel_column_name(len(headers))}1"
-            )
-
-    @staticmethod
-    def _excel_column_name(index: int) -> str:
-        """Convert a one-based column index to its Excel column name."""
-        column_name = ""
-        while index:
-            index, remainder = divmod(index - 1, 26)
-            column_name = chr(ord("A") + remainder) + column_name
-        return column_name
-
-    @staticmethod
-    def _excel_string(value: str) -> str:
-        return '"' + value.replace('"', '""') + '"'
-
-    @staticmethod
-    def _prepare_dynamic_formula(formula: str) -> str:
-        """Prefix dynamic-array functions as required by the XLSX format."""
-        functions = {
-            "CHOOSECOLS": "_xlfn.CHOOSECOLS",
-            "FILTER": "_xlfn._xlws.FILTER",
-            "HSTACK": "_xlfn.HSTACK",
-            "SORT": "_xlfn._xlws.SORT",
-            "UNIQUE": "_xlfn.UNIQUE",
-            "VSTACK": "_xlfn.VSTACK",
-        }
-        for function, prefix in functions.items():
-            formula = re.sub(rf"\b{function}\(", f"{prefix}(", formula)
-        return formula
-
-    @classmethod
-    def _summary_formulas(
-        cls,
-        fitting_columns: tuple[str, ...],
-        pipe_columns: tuple[str, ...],
-        fittings_sheet_name: str,
-        pipe_sheet_name: str,
-    ) -> dict[str, str]:
-        """Build dynamic formulas for the three summary tables."""
-        fittings_sheet = cls._excel_sheet_reference(fittings_sheet_name)
-        pipe_sheet = cls._excel_sheet_reference(pipe_sheet_name)
-        fitting_type = cls._worksheet_column_reference(
-            fittings_sheet, fitting_columns, NewPointLayerFields.type.field_name
-        )
-        fitting_dim_1 = cls._worksheet_column_reference(
-            fittings_sheet, fitting_columns, NewPointLayerFields.dim_1.field_name
-        )
-        fitting_dim_2 = cls._worksheet_column_reference(
-            fittings_sheet, fitting_columns, NewPointLayerFields.dim_2.field_name
-        )
-        fitting_angle = cls._worksheet_column_reference(
-            fittings_sheet, fitting_columns, NewPointLayerFields.angle.field_name
-        )
-        pipe_diameter = cls._worksheet_column_reference(
-            pipe_sheet, pipe_columns, NewLineLayerFields.dim.field_name
-        )
-        pipe_length = cls._worksheet_column_reference(
-            pipe_sheet, pipe_columns, NewLineLayerFields.length.field_name
-        )
-        questionable = cls._excel_string(FittingType.QUESTIONABLE.translated)
-        bend = cls._excel_string(FittingType.BEND.translated)
-        total = cls._excel_string(QCoreApplication.translate("XlsxExport", "Total"))
-        diameter_prefix = cls._excel_string(f"{Names.dim_prefix} ")
-        valid_fittings = f'({fitting_type}<>"")*({fitting_type}<>{questionable})'
-
-        pipe_diameters = f'SORT(UNIQUE(FILTER({pipe_diameter},{pipe_length}<>"")))'
-        pipe_formula = (
-            f'=IF(COUNTIF({pipe_length},"<>")=0,HSTACK({total},0),'
-            f'VSTACK(HSTACK({diameter_prefix}&TEXT({pipe_diameters},"0"),'
-            f"SUMIF({pipe_diameter},{pipe_diameters},{pipe_length})),"
-            f"HSTACK({total},SUM({pipe_length}))))"
-        )
-
-        fitting_types = f'SORT(UNIQUE(FILTER({fitting_type},{fitting_type}<>"")))'
-        fittings_formula = (
-            f'=IF(COUNTIF({fitting_type},"<>")=0,HSTACK({total},0),'
-            f"VSTACK(HSTACK({fitting_types},COUNTIF({fitting_type},{fitting_types})),"
-            f'HSTACK({total},COUNTIF({fitting_type},"<>"))))'
-        )
-
-        filtered_types = f"FILTER({fitting_type},{valid_fittings})"
-        filtered_dim_1 = (
-            f'FILTER(IF({fitting_dim_1}=0,"",{fitting_dim_1}),{valid_fittings})'
-        )
-        filtered_dim_2 = (
-            f'FILTER(IF({fitting_dim_2}=0,"",{fitting_dim_2}),{valid_fittings})'
-        )
-        filtered_upper = (
-            f"FILTER(IF(({fitting_type}={bend})*ISNUMBER({fitting_angle}),"
-            f"IF(CEILING({fitting_angle},45)<45,45,"
-            f'CEILING({fitting_angle},45)),""),{valid_fittings})'
-        )
-        filtered_lower = (
-            f'IF({filtered_upper}<>"",'
-            f'IF({filtered_upper}-45<0,0,{filtered_upper}-45),"")'
-        )
-        detailed_sort_key = (
-            f'{filtered_types}&"|"&TEXT({filtered_lower},"00000")&"|"&'
-            f'TEXT({filtered_upper},"00000")&"|"&TEXT({filtered_dim_1},"00000")&'
-            f'"|"&TEXT({filtered_dim_2},"00000")'
-        )
-        detailed_keys = (
-            f"SORT(UNIQUE(HSTACK({detailed_sort_key},{filtered_types},"
-            f"{filtered_dim_1},{filtered_dim_2},{filtered_lower},{filtered_upper})))"
-        )
-        detail_last_row = f"MAX(4,COUNTA({fittings_sheet}!$A:$A)+3)"
-        details_key_reference = (
-            f"FILTER($X$4:INDEX($AC:$AC,{detail_last_row}),"
-            f'$X$4:INDEX($X:$X,{detail_last_row})<>"")'
-        )
-        detail_type = f"CHOOSECOLS({details_key_reference},2)"
-        detail_dim_1 = f"CHOOSECOLS({details_key_reference},3)"
-        detail_dim_2 = f"CHOOSECOLS({details_key_reference},4)"
-        detail_lower = f"CHOOSECOLS({details_key_reference},5)"
-        detail_upper = f"CHOOSECOLS({details_key_reference},6)"
-        detail_labels = (
-            f'{detail_type}&IF({detail_dim_1}<>""," / DN "&'
-            f'TEXT({detail_dim_1},"0"),"")&IF({detail_dim_2}<>"",'
-            f'" / DN "&TEXT({detail_dim_2},"0"),"")&IF({detail_upper}<>'
-            f'""," / "&TEXT({detail_lower},"0")&"° - "&'
-            f'TEXT({detail_upper},"0")&"°","")'
-        )
-        detail_counts = (
-            f'IF({detail_type}={bend},IF({detail_upper}<>"",'
-            f"COUNTIFS({fitting_type},{detail_type},{fitting_dim_1},{detail_dim_1},"
-            f'{fitting_dim_2},{detail_dim_2},{fitting_angle},">="&{detail_lower},'
-            f'{fitting_angle},"<="&{detail_upper}),'
-            f"COUNTIFS({fitting_type},{detail_type},{fitting_dim_1},{detail_dim_1},"
-            f'{fitting_dim_2},{detail_dim_2},{fitting_angle},"")),'
-            f"COUNTIFS({fitting_type},{detail_type},{fitting_dim_1},{detail_dim_1},"
-            f"{fitting_dim_2},{detail_dim_2}))"
-        )
-        fitting_total_count = (
-            f'COUNTIFS({fitting_type},"<>",{fitting_type},"<>"&{questionable})'
-        )
-        detailed_formula = (
-            f"=IF({fitting_total_count}=0,HSTACK({total},0),"
-            f"VSTACK(HSTACK({detail_labels},{detail_counts}),"
-            f"HSTACK({total},SUM({detail_counts}))))"
-        )
-        detailed_keys_formula = (
-            f'=IF({fitting_total_count}=0,HSTACK("","","","","",""),{detailed_keys})'
-        )
-        return {
-            "pipe": cls._prepare_dynamic_formula(pipe_formula),
-            "fittings": cls._prepare_dynamic_formula(fittings_formula),
-            "detailed": cls._prepare_dynamic_formula(detailed_formula),
-            "detailed_keys": cls._prepare_dynamic_formula(detailed_keys_formula),
-        }
-
-    @classmethod
-    def _worksheet_column_reference(
-        cls, sheet_name: str, columns: tuple[str, ...], field_name: str
-    ) -> str:
-        """Create a column range that expands as the worksheet gains rows."""
-        if field_name not in columns:
-            raise_runtime_error(
-                f"Could not find the '{field_name}' column in the Excel sheet."
-            )
-        column_index = columns.index(field_name) + 1
-        column_name = cls._excel_column_name(column_index)
-        key_column = cls._excel_column_name(columns.index(columns[0]) + 1)
-        return (
-            f"{sheet_name}!${column_name}$2:"
-            f"INDEX({sheet_name}!${column_name}:${column_name},"
-            f"MAX(2,COUNTA({sheet_name}!${key_column}:${key_column})))"
-        )
-
-    @staticmethod
-    def _excel_sheet_reference(sheet_name: str) -> str:
-        """Quote a worksheet name for use in formulas."""
-        return "'" + sheet_name.replace("'", "''") + "'"
-
-    @staticmethod
-    def _add_dynamic_array_metadata(
-        workbook_root: ET.Element,
-        relationships_root: ET.Element,
-        content_types_root: ET.Element,
-    ) -> None:
-        """Register dynamic-array metadata and request recalculation in Excel."""
-        relationship = next(
-            (
-                item
-                for item in relationships_root.findall(
-                    ExcelExporter._tag(_PACKAGE_REL_NS, "Relationship")
-                )
-                if item.get("Type", "").endswith("/sheetMetadata")
-            ),
-            None,
-        )
-        if relationship is None:
-            relationship_ids = [
-                int(match.group(1))
-                for item in relationships_root.findall(
-                    ExcelExporter._tag(_PACKAGE_REL_NS, "Relationship")
-                )
-                if (match := re.fullmatch(r"rId(\d+)", item.get("Id", "")))
-            ]
-            relationship = ET.SubElement(
-                relationships_root,
-                ExcelExporter._tag(_PACKAGE_REL_NS, "Relationship"),
-                {
-                    "Id": f"rId{max(relationship_ids, default=0) + 1}",
-                    "Type": (
-                        "http://schemas.openxmlformats.org/officeDocument/2006/"
-                        "relationships/sheetMetadata"
-                    ),
-                    "Target": "metadata.xml",
-                },
-            )
-        else:
-            relationship.set("Target", "metadata.xml")
-
-        metadata_part = "/xl/metadata.xml"
-        metadata_override = next(
-            (
-                item
-                for item in content_types_root.findall(
-                    ExcelExporter._tag(_CONTENT_TYPES_NS, "Override")
-                )
-                if item.get("PartName") == metadata_part
-            ),
-            None,
-        )
-        if metadata_override is None:
-            ET.SubElement(
-                content_types_root,
-                ExcelExporter._tag(_CONTENT_TYPES_NS, "Override"),
-                {
-                    "PartName": metadata_part,
-                    "ContentType": (
-                        "application/vnd.openxmlformats-officedocument."
-                        "spreadsheetml.sheetMetadata+xml"
-                    ),
-                },
-            )
-
-        calculation = workbook_root.find(ExcelExporter._tag(_MAIN_NS, "calcPr"))
-        if calculation is None:
-            calculation = ET.Element(ExcelExporter._tag(_MAIN_NS, "calcPr"))
-            extension_list = workbook_root.find(ExcelExporter._tag(_MAIN_NS, "extLst"))
-            workbook_root.insert(
-                list(workbook_root).index(extension_list)
-                if extension_list is not None
-                else len(workbook_root),
-                calculation,
-            )
-        calculation.set("calcMode", "auto")
-        calculation.set("fullCalcOnLoad", "1")
-        calculation.set("forceFullCalc", "1")
-
-    @staticmethod
-    def _dynamic_array_metadata_xml() -> bytes:
-        """Build the metadata required for dynamic-array formula cells."""
-        root = ET.Element(ExcelExporter._tag(_MAIN_NS, "metadata"))
-        types = ET.SubElement(
-            root,
-            ExcelExporter._tag(_MAIN_NS, "metadataTypes"),
-            {"count": "1"},
-        )
-        ET.SubElement(
-            types,
-            ExcelExporter._tag(_MAIN_NS, "metadataType"),
-            {
-                "name": "XLDAPR",
-                "minSupportedVersion": "120000",
-                "copy": "1",
-                "pasteAll": "1",
-                "pasteValues": "1",
-                "merge": "1",
-                "splitFirst": "1",
-                "rowColShift": "1",
-                "clearFormats": "1",
-                "clearComments": "1",
-                "assign": "1",
-                "coerce": "1",
-                "cellMeta": "1",
-            },
-        )
-        future_metadata = ET.SubElement(
-            root,
-            ExcelExporter._tag(_MAIN_NS, "futureMetadata"),
-            {"name": "XLDAPR", "count": "1"},
-        )
-        bookmark = ET.SubElement(future_metadata, ExcelExporter._tag(_MAIN_NS, "bk"))
-        extension_list = ET.SubElement(bookmark, ExcelExporter._tag(_MAIN_NS, "extLst"))
-        extension = ET.SubElement(
-            extension_list,
-            ExcelExporter._tag(_MAIN_NS, "ext"),
-            {"uri": "{bdbb8cdc-fa1e-496e-a857-3c3f30c029c3}"},
-        )
-        ET.SubElement(
-            extension,
-            ExcelExporter._tag(_DYNAMIC_ARRAY_NS, "dynamicArrayProperties"),
-            {"fDynamic": "1", "fCollapsed": "0"},
-        )
-        cell_metadata = ET.SubElement(
-            root,
-            ExcelExporter._tag(_MAIN_NS, "cellMetadata"),
-            {"count": "1"},
-        )
-        cell_bookmark = ET.SubElement(cell_metadata, ExcelExporter._tag(_MAIN_NS, "bk"))
-        ET.SubElement(
-            cell_bookmark,
-            ExcelExporter._tag(_MAIN_NS, "rc"),
-            {"t": "1", "v": "0"},
-        )
-        return ExcelExporter._xml_bytes(root, _MAIN_NS)
 
     @staticmethod
     def _add_summary_sheet(
@@ -830,8 +496,8 @@ class ExcelExporter:
     @staticmethod
     def _add_excel_styles(
         styles_root: ET.Element,
-    ) -> tuple[int, int, int, int, int, int]:
-        """Add summary styles and return header, number, and total style IDs."""
+    ) -> tuple[int, int, int, int, int, int, int]:
+        """Add summary font and number formats and return their style IDs."""
         num_fmts = styles_root.find(ExcelExporter._tag(_MAIN_NS, "numFmts"))
         if num_fmts is None:
             num_fmts = ET.Element(ExcelExporter._tag(_MAIN_NS, "numFmts"))
@@ -940,6 +606,7 @@ class ExcelExporter:
             font_id: int,
             num_fmt_id: int,
             *,
+            bold: bool,
             number_format: bool,
             horizontal: str | None = None,
         ) -> int:
@@ -949,6 +616,7 @@ class ExcelExporter:
                 "fillId": "0",
                 "borderId": "0",
                 "xfId": "0",
+                "applyFont": "1" if bold else None,
                 "applyNumberFormat": "1" if number_format else None,
                 "applyAlignment": "1" if horizontal is not None else None,
             }
@@ -982,10 +650,14 @@ class ExcelExporter:
             cell_styles.set("count", str(len(cell_styles)))
             return style_id
 
+        bold_style = find_or_add_style(
+            cell_xfs, bold_font_id, 164, bold=True, number_format=False
+        )
         header_left_style = find_or_add_style(
             cell_xfs,
             header_font_id,
             164,
+            bold=True,
             number_format=False,
             horizontal="left",
         )
@@ -993,111 +665,28 @@ class ExcelExporter:
             cell_xfs,
             header_font_id,
             164,
+            bold=True,
             number_format=False,
             horizontal="right",
         )
         length_style = find_or_add_style(
-            cell_xfs,
-            0,
-            format_id,
-            number_format=True,
-            horizontal="right",
+            cell_xfs, 0, format_id, bold=False, number_format=True
         )
-        amount_style = find_or_add_style(
-            cell_xfs, 0, 3, number_format=True, horizontal="right"
+        bold_length_style = find_or_add_style(
+            cell_xfs, bold_font_id, format_id, bold=True, number_format=True
         )
-
-        differential_styles = styles_root.find(ExcelExporter._tag(_MAIN_NS, "dxfs"))
-        if differential_styles is None:
-            differential_styles = ET.Element(ExcelExporter._tag(_MAIN_NS, "dxfs"))
-            insert_before = next(
-                (
-                    index
-                    for index, element in enumerate(styles_root)
-                    if element.tag
-                    in {
-                        ExcelExporter._tag(_MAIN_NS, "tableStyles"),
-                        ExcelExporter._tag(_MAIN_NS, "colors"),
-                        ExcelExporter._tag(_MAIN_NS, "extLst"),
-                    }
-                ),
-                len(styles_root),
-            )
-            styles_root.insert(insert_before, differential_styles)
-
-        total_dxf_id = next(
-            (
-                index
-                for index, differential_style in enumerate(differential_styles)
-                if (
-                    (
-                        font := differential_style.find(
-                            ExcelExporter._tag(_MAIN_NS, "font")
-                        )
-                    )
-                    is not None
-                    and font.find(ExcelExporter._tag(_MAIN_NS, "b")) is not None
-                )
-            ),
-            None,
+        amount_style = find_or_add_style(cell_xfs, 0, 3, bold=False, number_format=True)
+        bold_amount_style = find_or_add_style(
+            cell_xfs, bold_font_id, 3, bold=True, number_format=True
         )
-        if total_dxf_id is None:
-            differential_style = ET.SubElement(
-                differential_styles, ExcelExporter._tag(_MAIN_NS, "dxf")
-            )
-            font = ET.SubElement(
-                differential_style, ExcelExporter._tag(_MAIN_NS, "font")
-            )
-            ET.SubElement(font, ExcelExporter._tag(_MAIN_NS, "b"))
-            total_dxf_id = len(differential_styles) - 1
-
-        separator_dxf_id = next(
-            (
-                index
-                for index, differential_style in enumerate(differential_styles)
-                if (
-                    (
-                        border := differential_style.find(
-                            ExcelExporter._tag(_MAIN_NS, "border")
-                        )
-                    )
-                    is not None
-                    and len(differential_style) == 1
-                    and len(border) == 1
-                    and (bottom := border.find(ExcelExporter._tag(_MAIN_NS, "bottom")))
-                    is not None
-                    and bottom.get("style") == "thin"
-                )
-            ),
-            None,
-        )
-        if separator_dxf_id is None:
-            differential_style = ET.SubElement(
-                differential_styles, ExcelExporter._tag(_MAIN_NS, "dxf")
-            )
-            border = ET.SubElement(
-                differential_style, ExcelExporter._tag(_MAIN_NS, "border")
-            )
-            bottom = ET.SubElement(
-                border,
-                ExcelExporter._tag(_MAIN_NS, "bottom"),
-                {"style": "thin"},
-            )
-            ET.SubElement(
-                bottom,
-                ExcelExporter._tag(_MAIN_NS, "color"),
-                {"auto": "1"},
-            )
-            separator_dxf_id = len(differential_styles) - 1
-        differential_styles.set("count", str(len(differential_styles)))
-
         return (
+            bold_style,
             header_left_style,
             header_right_style,
             length_style,
+            bold_length_style,
             amount_style,
-            total_dxf_id,
-            separator_dxf_id,
+            bold_amount_style,
         )
 
     @staticmethod
@@ -1141,51 +730,86 @@ class ExcelExporter:
                     cell.set("s", str(style_id))
 
     @classmethod
+    def _hide_grid_lines(cls, worksheet: ET.Element) -> None:
+        """Ensure the worksheet view hides grid lines."""
+        views = worksheet.find(cls._tag(_MAIN_NS, "sheetViews"))
+        if views is None:
+            worksheet_element_order = (
+                "sheetPr",
+                "dimension",
+                "sheetViews",
+                "sheetFormatPr",
+                "cols",
+                "sheetData",
+            )
+            insertion_index = next(
+                (
+                    index
+                    for index, element in enumerate(worksheet)
+                    if element.tag.rsplit("}", 1)[-1] in worksheet_element_order
+                    and worksheet_element_order.index(element.tag.rsplit("}", 1)[-1])
+                    > worksheet_element_order.index("sheetViews")
+                ),
+                len(worksheet),
+            )
+            views = ET.Element(cls._tag(_MAIN_NS, "sheetViews"))
+            worksheet.insert(insertion_index, views)
+
+        view = views.find(cls._tag(_MAIN_NS, "sheetView"))
+        if view is None:
+            view = ET.SubElement(
+                views,
+                cls._tag(_MAIN_NS, "sheetView"),
+                {"workbookViewId": "0"},
+            )
+        view.set("showGridLines", "0")
+
+    @classmethod
     def _summary_worksheet_xml(
         cls,
-        formulas: dict[str, str],
+        summary_data: _SummaryData,
+        bold_style: int,
         header_left_style: int,
         header_right_style: int,
         length_style: int,
+        bold_length_style: int,
         amount_style: int,
-        total_dxf_id: int,
-        separator_dxf_id: int,
+        bold_amount_style: int,
     ) -> bytes:
-        """Create the formula-driven summary sheet at the requested positions."""
+        """Create the summary worksheet."""
         root = ET.Element(cls._tag(_MAIN_NS, "worksheet"))
-        ET.SubElement(root, cls._tag(_MAIN_NS, "dimension"), {"ref": "B3:AC4"})
+        pipe_table_rows = len(summary_data.pipe_runs) + 2
+        fittings_table_rows = len(summary_data.fitting_counts) + (
+            4 if summary_data.questionable_points is not None else 2
+        )
+        detailed_table_rows = len(summary_data.detailed_fittings) + 2
+        row_count = max(pipe_table_rows, fittings_table_rows, detailed_table_rows)
+        last_row: int = 3 + row_count
+        ET.SubElement(root, cls._tag(_MAIN_NS, "dimension"), {"ref": f"B3:I{last_row}"})
         views = ET.SubElement(root, cls._tag(_MAIN_NS, "sheetViews"))
-        ET.SubElement(views, cls._tag(_MAIN_NS, "sheetView"), {"workbookViewId": "0"})
+        ET.SubElement(
+            views,
+            cls._tag(_MAIN_NS, "sheetView"),
+            {"workbookViewId": "0", "showGridLines": "0"},
+        )
         ET.SubElement(
             root,
             cls._tag(_MAIN_NS, "sheetFormatPr"),
             {"defaultRowHeight": "15"},
         )
         columns = ET.SubElement(root, cls._tag(_MAIN_NS, "cols"))
-        widths = (15, 20, 18, 15, 24, 12, 7, 26, 12)
+        widths = (15, 15, 15, 20, 17, 8, 8, 28, 8)
         for column, width in enumerate(widths, start=1):
-            attributes = {
-                "min": str(column),
-                "max": str(column),
-                "width": str(width),
-                "customWidth": "1",
-            }
-            if column == 3:
-                attributes["style"] = str(length_style)
-            elif column in {6, 9}:
-                attributes["style"] = str(amount_style)
-            ET.SubElement(columns, cls._tag(_MAIN_NS, "col"), attributes)
-        ET.SubElement(
-            columns,
-            cls._tag(_MAIN_NS, "col"),
-            {
-                "min": "24",
-                "max": "29",
-                "width": "0",
-                "hidden": "1",
-                "customWidth": "1",
-            },
-        )
+            ET.SubElement(
+                columns,
+                cls._tag(_MAIN_NS, "col"),
+                {
+                    "min": str(column),
+                    "max": str(column),
+                    "width": str(width),
+                    "customWidth": "1",
+                },
+            )
 
         sheet_data = ET.SubElement(root, cls._tag(_MAIN_NS, "sheetData"))
         header = ET.SubElement(sheet_data, cls._tag(_MAIN_NS, "row"), {"r": "3"})
@@ -1202,59 +826,55 @@ class ExcelExporter:
             )
             cls._add_text_cell(header, f"{column}3", label, style)
 
-        total_label = QCoreApplication.translate("XlsxExport", "Total")
-        formula_row = ET.SubElement(sheet_data, cls._tag(_MAIN_NS, "row"), {"r": "4"})
-        for column, formula in (
-            ("B", formulas["pipe"]),
-            ("E", formulas["fittings"]),
-            ("H", formulas["detailed"]),
-            ("X", formulas["detailed_keys"]),
-        ):
-            cls._add_dynamic_array_formula_cell(formula_row, f"{column}4", formula)
-
-        for label_column, value_column, priority in (
-            ("B", "C", 1),
-            ("E", "F", 2),
-            ("H", "I", 3),
-        ):
-            conditional_formatting = ET.SubElement(
-                root,
-                cls._tag(_MAIN_NS, "conditionalFormatting"),
-                {"sqref": f"{label_column}4:{value_column}1048576"},
+        total_label: str = QCoreApplication.translate("XlsxExport", "Total")
+        for index in range(row_count):
+            row_number: int = index + 4
+            row = ET.SubElement(
+                sheet_data,
+                cls._tag(_MAIN_NS, "row"),
+                {"r": str(row_number)},
             )
-            rule = ET.SubElement(
-                conditional_formatting,
-                cls._tag(_MAIN_NS, "cfRule"),
-                {
-                    "type": "expression",
-                    "dxfId": str(total_dxf_id),
-                    "priority": str(priority),
-                },
+            cls._add_summary_cells(
+                row,
+                "B",
+                "C",
+                summary_data.pipe_runs,
+                index,
+                total_label,
+                sum(length for _, length in summary_data.pipe_runs),
+                bold_style,
+                length_style,
+                bold_length_style,
             )
-            formula = ET.SubElement(rule, cls._tag(_MAIN_NS, "formula"))
-            formula.text = f"${label_column}4={cls._excel_string(total_label)}"
-
-        separator_formatting = ET.SubElement(
-            root,
-            cls._tag(_MAIN_NS, "conditionalFormatting"),
-            {"sqref": "H4:I1048575"},
-        )
-        separator_rule = ET.SubElement(
-            separator_formatting,
-            cls._tag(_MAIN_NS, "cfRule"),
-            {
-                "type": "expression",
-                "dxfId": str(separator_dxf_id),
-                "priority": "4",
-            },
-        )
-        separator_formula = ET.SubElement(separator_rule, cls._tag(_MAIN_NS, "formula"))
-        separator_formula.text = (
-            f'AND($H4<>"",$H4<>{cls._excel_string(total_label)},'
-            f'$H5<>"",$H5<>{cls._excel_string(total_label)},'
-            'IFERROR(LEFT($H4,FIND(" / ",$H4&" / ")-1),$H4)'
-            '<>IFERROR(LEFT($H5,FIND(" / ",$H5&" / ")-1),$H5))'
-        )
+            cls._add_summary_cells(
+                row,
+                "E",
+                "F",
+                summary_data.fitting_counts,
+                index,
+                total_label,
+                sum(count for _, count in summary_data.fitting_counts),
+                bold_style,
+                amount_style,
+                bold_amount_style,
+                extra_item=summary_data.questionable_points,
+            )
+            cls._add_summary_cells(
+                row,
+                "H",
+                "I",
+                summary_data.detailed_fittings,
+                index,
+                total_label,
+                sum(
+                    item[1]
+                    for item in summary_data.detailed_fittings
+                    if item is not None
+                ),
+                bold_style,
+                amount_style,
+                bold_amount_style,
+            )
 
         ET.SubElement(
             root,
@@ -1270,22 +890,44 @@ class ExcelExporter:
         )
         return cls._xml_bytes(root, _MAIN_NS)
 
-    @staticmethod
-    def _add_dynamic_array_formula_cell(
-        row: ET.Element, reference: str, formula: str
+    @classmethod
+    def _add_summary_cells(
+        cls,
+        row: ET.Element,
+        label_column: str,
+        value_column: str,
+        values: tuple[tuple[str, float | int] | None, ...],
+        index: int,
+        total_label: str,
+        total_value: float,
+        bold_style: int,
+        value_style: int | None = None,
+        bold_value_style: int | None = None,
+        extra_item: tuple[str, int] | None = None,
     ) -> None:
-        cell = ET.SubElement(
-            row,
-            ExcelExporter._tag(_MAIN_NS, "c"),
-            {"r": reference, "cm": "1"},
-        )
-        formula_element = ET.SubElement(
-            cell,
-            ExcelExporter._tag(_MAIN_NS, "f"),
-            {"t": "array", "ref": reference},
-        )
-        formula_element.text = formula.lstrip("=")
-        ET.SubElement(cell, ExcelExporter._tag(_MAIN_NS, "v")).text = "0"
+        row_number: str = row.get("r", "")
+        if index < len(values):
+            item = values[index]
+            if item is not None:
+                label, value = item
+                cls._add_text_cell(row, f"{label_column}{row_number}", label)
+                cls._add_number_cell(
+                    row, f"{value_column}{row_number}", value, value_style
+                )
+        elif index == len(values) + 1:
+            cls._add_text_cell(
+                row, f"{label_column}{row_number}", total_label, bold_style
+            )
+            cls._add_number_cell(
+                row,
+                f"{value_column}{row_number}",
+                total_value,
+                bold_value_style or bold_style,
+            )
+        elif extra_item is not None and index == len(values) + 3:
+            label, value = extra_item
+            cls._add_text_cell(row, f"{label_column}{row_number}", label)
+            cls._add_number_cell(row, f"{value_column}{row_number}", value, value_style)
 
     @staticmethod
     def _add_text_cell(
@@ -1300,6 +942,20 @@ class ExcelExporter:
         text.text = value
 
     @staticmethod
+    def _add_number_cell(
+        row: ET.Element,
+        reference: str,
+        value: float,
+        style_id: int | None = None,
+    ) -> None:
+        attributes = {"r": reference}
+        if style_id is not None:
+            attributes["s"] = str(style_id)
+        cell = ET.SubElement(row, ExcelExporter._tag(_MAIN_NS, "c"), attributes)
+        number = ET.SubElement(cell, ExcelExporter._tag(_MAIN_NS, "v"))
+        number.text = str(value)
+
+    @staticmethod
     def _tag(namespace: str, local_name: str) -> str:
         return f"{{{namespace}}}{local_name}"
 
@@ -1307,7 +963,6 @@ class ExcelExporter:
     def _xml_bytes(root: ET.Element, default_namespace: str) -> bytes:
         ET.register_namespace("", default_namespace)
         ET.register_namespace("r", _DOCUMENT_REL_NS)
-        ET.register_namespace("xda", _DYNAMIC_ARRAY_NS)
         return ET.tostring(root, encoding="utf-8", xml_declaration=True)
 
     def _write_to_plugin_output_file(
