@@ -22,3 +22,4 @@ applyTo: "**/*.py"
 - Keep the agent out of the `i18n/` folder: do not edit, create, delete, compile, or bundle `.ts` or `.qm` translation files.
 - Do not run `lrelease` or other translation extraction/compilation tools.
 - New translatable source strings may be added to Python code, but do not update translation catalogs for them.
+- In destination plugin repositories, check `.github/shared-files-manifest.txt` before editing. Do not modify listed files there.
