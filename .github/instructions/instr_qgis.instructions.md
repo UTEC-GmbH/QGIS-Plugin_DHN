@@ -19,3 +19,6 @@ applyTo: "**/*.py"
 - Keep static source strings on a single line. Use `# fmt: off` and `# ruff: noqa: E501` only when a single long string would otherwise be wrapped or violate formatting rules, and restore formatting with `# fmt: on`.
 - Pass only static text as the translation source string. Construct dynamic output after translation:
   `QCoreApplication.translate("Context", "Found {} items").format(count)`
+- Keep the agent out of the `i18n/` folder: do not edit, create, delete, compile, or bundle `.ts` or `.qm` translation files.
+- Do not run `lrelease` or other translation extraction/compilation tools.
+- New translatable source strings may be added to Python code, but do not update translation catalogs for them.
